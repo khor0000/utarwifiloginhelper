@@ -43,7 +43,7 @@ class UtarLoginWindow:
         
         # Exact dimensions from UTAR portal CSS
         window_width = 360
-        window_height = 420
+        window_height = 440
         self.root.geometry(f"{window_width}x{window_height}")
         self.root.configure(bg="white")
         self.root.resizable(False, False)
