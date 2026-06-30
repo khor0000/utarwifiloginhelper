@@ -505,6 +505,7 @@ def save_config(path, username, password, ssid):
     except Exception as e:
         print(f"Error saving config: {e}")
 
+def main():
     # Locate config.json relative to the executable (sys.argv[0]) when compiled,
     # or next to the script (__file__) when running raw.
     try:
