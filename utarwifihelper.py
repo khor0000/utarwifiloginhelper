@@ -90,6 +90,13 @@ class UtarLoginWindow:
         
         # Progress UI Container
         self.progress_container = tk.Frame(self.body_frame, bg="white")
+        
+        # Add canvas for spinner animation
+        self.canvas = tk.Canvas(self.progress_container, width=50, height=50, bg="white", highlightthickness=0)
+        self.canvas.pack(pady=(40, 10))
+        self.spinner_angle = 0
+        self.animating = False
+
         self.log_label = tk.Label(
             self.progress_container,
             textvariable=self.log_var,
@@ -99,7 +106,7 @@ class UtarLoginWindow:
             justify="center",
             wraplength=300
         )
-        self.log_label.pack(expand=True, fill="both", pady=(50, 10))
+        self.log_label.pack(expand=True, fill="both", pady=(10, 10))
 
         self.retry_btn = tk.Button(
             self.progress_container,
@@ -178,6 +185,7 @@ class UtarLoginWindow:
 
     def show_login(self, error_msg=None):
         self.progress_container.pack_forget()
+        self.stop_animation()
         if error_msg:
             self.build_login_ui(error_msg)
         self.login_container.pack(fill="both", expand=True)
@@ -190,12 +198,40 @@ class UtarLoginWindow:
         self.progress_container.pack(fill="both", expand=True)
         self.log_var.set(initial_msg)
         self.mode = "progress"
+        self.start_animation()
         self.root.update()
 
     def show_retry(self, msg):
         self.log_var.set(msg)
+        self.stop_animation()
         self.retry_btn.pack(pady=20)
         self.root.update()
+
+    def start_animation(self):
+        if not self.animating:
+            self.animating = True
+            self.animate_spinner()
+
+    def stop_animation(self):
+        self.animating = False
+        try:
+            self.canvas.delete("all")
+        except tk.TclError:
+            pass
+
+    def animate_spinner(self):
+        if not self.animating:
+            return
+        try:
+            self.canvas.delete("spinner")
+            # Draw subtle gray background circle
+            self.canvas.create_oval(5, 5, 45, 45, outline="#f0f0f0", width=3, tags="spinner")
+            # Draw blue active spinning arc
+            self.canvas.create_arc(5, 5, 45, 45, start=self.spinner_angle, extent=60, outline="#1D4B9E", width=3, style="arc", tags="spinner")
+            self.spinner_angle = (self.spinner_angle - 10) % 360
+            self.root.after(30, self.animate_spinner)
+        except tk.TclError:
+            pass
 
     def create_utar_entry(self, parent, label_text, show=None):
         li_frame = tk.Frame(parent, bg="white", bd=0, highlightthickness=1, highlightbackground="#cccccc")
@@ -405,23 +441,21 @@ def detect_portal_url() -> str:
         "http://connectivitycheck.gstatic.com/generate_204",
         "http://www.msftconnecttest.com/redirect",
         "http://captive.apple.com/hotspot-detect.html",
-        "http://203.0.144.1/generate_204",
-        "http://203.0.113.1/generate_204",
     ]
     
-    # Try multiple times to account for DHCP delay
-    for attempt in range(5):
+    # Try 2 times to account for DHCP delay
+    for attempt in range(2):
         if attempt > 0:
-            time.sleep(3)
+            time.sleep(2)
             
         session = requests.Session()
-        session.max_redirects = 5
+        session.max_redirects = 3
         session.verify = False
 
         for url in test_urls:
             try:
-                # Check for 302 redirect
-                resp = session.get(url, timeout=5, allow_redirects=False)
+                # Check for 302 redirect with a short 2s timeout
+                resp = session.get(url, timeout=2, allow_redirects=False)
                 if resp.status_code in [302, 301] and "Location" in resp.headers:
                     loc = resp.headers["Location"]
                     if "/ac_portal/" in loc:
@@ -432,7 +466,7 @@ def detect_portal_url() -> str:
                         return loc
                 
                 # Check for meta-refresh or script redirects in 200 responses
-                resp = session.get(url, timeout=5, allow_redirects=True)
+                resp = session.get(url, timeout=2, allow_redirects=True)
                 if "/ac_portal/" in resp.url and "pc.html" in resp.url:
                     return resp.url
             except Exception:
@@ -564,9 +598,11 @@ def main():
                     if check_internet():
                         break
                     try:
-                        # Try a quick portal detection check
-                        detect_portal_url()
-                        break
+                        # Fast check to see if a simple HTTP GET redirects to ac_portal
+                        resp = requests.get("http://connectivitycheck.gstatic.com/generate_204", timeout=1.5, allow_redirects=False)
+                        if resp.status_code in [302, 301] and "Location" in resp.headers:
+                            if "/ac_portal/" in resp.headers["Location"]:
+                                break
                     except:
                         pass
                     time.sleep(1)
