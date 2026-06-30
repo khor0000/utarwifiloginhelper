@@ -506,16 +506,25 @@ def save_config(path, username, password, ssid):
         print(f"Error saving config: {e}")
 
 def main():
-    # Locate config.json relative to the executable (sys.argv[0]) when compiled,
-    # or next to the script (__file__) when running raw.
+    # Locate config.json relative to the user's AppData directory (or home folder as fallback)
+    # to avoid creating files in the same directory as the executable.
     try:
-        if sys.argv[0]:
-            exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-        else:
+        appdata_dir = os.environ.get("APPDATA")
+        if not appdata_dir:
+            appdata_dir = os.path.expanduser("~")
+        config_dir = os.path.join(appdata_dir, "UtarWifiHelper")
+        os.makedirs(config_dir, exist_ok=True)
+        config_path = os.path.join(config_dir, "config.json")
+    except Exception as e:
+        # Fallback to local script/exe directory
+        try:
+            if sys.argv[0]:
+                exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+            else:
+                exe_dir = os.path.dirname(os.path.abspath(__file__))
+        except:
             exe_dir = os.path.dirname(os.path.abspath(__file__))
-    except:
-        exe_dir = os.path.dirname(os.path.abspath(__file__))
-    config_path = os.path.join(exe_dir, "config.json")
+        config_path = os.path.join(exe_dir, "config.json")
     config = {}
     gui = None
     
