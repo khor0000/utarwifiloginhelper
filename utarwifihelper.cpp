@@ -13,6 +13,7 @@ processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 #include <wininet.h>
 #include <shlobj.h>
 #include <shlwapi.h>
+#include <shellapi.h>
 #include <gdiplus.h>
 #include <string>
 #include <vector>
@@ -51,9 +52,11 @@ HWND g_hwndPass = NULL;
 HWND g_hwndLoginBtn = NULL;
 HWND g_hwndRetryBtn = NULL;
 HWND g_hwndStatusLabel = NULL;
+HWND g_hwndFooter = NULL;
 
 HFONT g_hFontTitle = NULL;
 HFONT g_hFontNormal = NULL;
+HFONT g_hFontStatus = NULL;
 HFONT g_hFontButton = NULL;
 HFONT g_hFontFooter = NULL;
 
@@ -619,6 +622,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         // Define Segoe UI fonts
         g_hFontTitle = CreateFontW(22, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei");
         g_hFontNormal = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei");
+        g_hFontStatus = CreateFontW(19, 0, 0, 0, FW_MEDIUM, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei");
         g_hFontButton = CreateFontW(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei");
         g_hFontFooter = CreateFontW(12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, ANSI_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Microsoft YaHei");
 
@@ -637,7 +641,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         g_hwndRetryBtn = CreateWindowExW(0, L"BUTTON", L"Retry Connection", WS_CHILD | BS_OWNERDRAW, 100, 290, 144, 36, hwnd, (HMENU)ID_BTN_RETRY, NULL, NULL);
 
         g_hwndStatusLabel = CreateWindowExW(0, L"STATIC", L"Checking internet...", WS_CHILD | SS_CENTER, 20, 220, 304, 50, hwnd, NULL, NULL, NULL);
-        SendMessageW(g_hwndStatusLabel, WM_SETFONT, (WPARAM)g_hFontNormal, TRUE);
+        SendMessageW(g_hwndStatusLabel, WM_SETFONT, (WPARAM)g_hFontStatus, TRUE);
+
+        g_hwndFooter = CreateWindowExW(0, L"STATIC", L"Open Source on GitHub • Developed by @khor0000\nNot affiliated with UTAR", WS_CHILD | WS_VISIBLE | SS_CENTER | SS_NOTIFY, 0, 370, 344, 30, hwnd, (HMENU)201, NULL, NULL);
+        SendMessageW(g_hwndFooter, WM_SETFONT, (WPARAM)g_hFontFooter, TRUE);
 
         // Preload config values
         if (!g_username.empty()) SetWindowTextW(g_hwndUser, g_username.c_str());
@@ -662,11 +669,25 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         }
         break;
     }
+    case WM_SETCURSOR:
+    {
+        HWND hwndChild = (HWND)wParam;
+        if (hwndChild == g_hwndFooter) {
+            SetCursor(LoadCursor(NULL, IDC_HAND));
+            return TRUE;
+        }
+        return DefWindowProc(hwnd, message, wParam, lParam);
+    }
     case WM_CTLCOLORSTATIC:
     {
         HDC hdc = (HDC)wParam;
+        HWND hwndStatic = (HWND)lParam;
         SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(0x44, 0x44, 0x44));
+        if (hwndStatic == g_hwndFooter) {
+            SetTextColor(hdc, RGB(0x99, 0x99, 0x99));
+        } else {
+            SetTextColor(hdc, RGB(0x44, 0x44, 0x44));
+        }
         return (LRESULT)GetStockObject(WHITE_BRUSH);
     }
     case WM_DRAWITEM:
@@ -716,6 +737,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
             }
         } else if (LOWORD(wParam) == ID_BTN_RETRY) {
             start_worker();
+        } else if (LOWORD(wParam) == 201 && HIWORD(wParam) == STN_CLICKED) {
+            ShellExecuteW(NULL, L"open", L"https://github.com/khor0000/utarwifiloginhelper", NULL, NULL, SW_SHOWNORMAL);
         }
         break;
     }
@@ -781,12 +804,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
             graphics.FillPolygon(&brush, points.data(), (int)points.size());
         }
 
-        // Footer Section
-        SelectObject(memDC, g_hFontFooter);
-        SetTextColor(memDC, RGB(0x99, 0x99, 0x99));
-        RECT rFooter = { 0, height - 40, width, height - 10 };
-        DrawTextW(memDC, L"Open Source on GitHub • Developed by @khor0000\nNot affiliated with UTAR", -1, &rFooter, DT_CENTER);
-
         BitBlt(hdc, 0, 0, width, height, memDC, 0, 0, SRCCOPY);
         DeleteObject(memBitmap);
         DeleteDC(memDC);
@@ -800,6 +817,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         KillTimer(hwnd, ID_TIMER_ANIM);
         DeleteObject(g_hFontTitle);
         DeleteObject(g_hFontNormal);
+        DeleteObject(g_hFontStatus);
         DeleteObject(g_hFontButton);
         DeleteObject(g_hFontFooter);
         PostQuitMessage(0);
@@ -809,8 +827,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
     }
     return 0;
 }
-
-// Entry point
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     // Enable DPI awareness
     SetProcessDPIAware();
