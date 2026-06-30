@@ -27,6 +27,9 @@ scratch/
 # Temporary files
 *.tmp
 *.log
+*.manifest
+*.res
+*.obj
 
 # Scratch folder
 scratch/
