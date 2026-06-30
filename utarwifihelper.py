@@ -505,8 +505,16 @@ def save_config(path, username, password, ssid):
     except Exception as e:
         print(f"Error saving config: {e}")
 
-def main():
-    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    # Locate config.json relative to the executable (sys.argv[0]) when compiled,
+    # or next to the script (__file__) when running raw.
+    try:
+        if sys.argv[0]:
+            exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+        else:
+            exe_dir = os.path.dirname(os.path.abspath(__file__))
+    except:
+        exe_dir = os.path.dirname(os.path.abspath(__file__))
+    config_path = os.path.join(exe_dir, "config.json")
     config = {}
     gui = None
     
