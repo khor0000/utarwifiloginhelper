@@ -22,3 +22,10 @@ config.json
 # Temporary files
 *.tmp
 *.log
+
+# Scratch folder
+scratch/
+
+# UTAR captive portal reference files
+Welcome to UTAR Wireless Network.html
+Welcome to UTAR Wireless Network_files/
