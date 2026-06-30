@@ -2,7 +2,7 @@
 """
 UTAR WiFi Full Auto-Login
 - Scans for 'utarwifi' SSID
-- Connects to it (open network)
+- Connects to it (open network
 - Performs captive portal login
 """
 
@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlparse
 import sys
 import json
 import os
+import math
 import threading
 import pywifi
 from pywifi import const
@@ -91,14 +92,18 @@ class UtarLoginWindow:
         # Progress UI Container
         self.progress_container = tk.Frame(self.body_frame, bg="white")
         
+        # Inner frame to perfectly group and center the loader and text
+        self.inner_progress = tk.Frame(self.progress_container, bg="white")
+        self.inner_progress.place(relx=0.5, rely=0.5, anchor="center")
+        
         # Add canvas for spinner animation
-        self.canvas = tk.Canvas(self.progress_container, width=50, height=50, bg="white", highlightthickness=0)
-        self.canvas.pack(pady=(40, 10))
+        self.canvas = tk.Canvas(self.inner_progress, width=50, height=50, bg="white", highlightthickness=0)
+        self.canvas.pack(pady=(0, 15))
         self.spinner_angle = 0
         self.animating = False
 
         self.log_label = tk.Label(
-            self.progress_container,
+            self.inner_progress,
             textvariable=self.log_var,
             font=("Microsoft Yahei", 9),
             bg="white",
@@ -106,10 +111,10 @@ class UtarLoginWindow:
             justify="center",
             wraplength=300
         )
-        self.log_label.pack(expand=True, fill="both", pady=(10, 10))
+        self.log_label.pack()
 
         self.retry_btn = tk.Button(
-            self.progress_container,
+            self.inner_progress,
             text="Retry Connection",
             font=("Microsoft Yahei", 9, "bold"),
             bg="#1D4B9E",
@@ -117,6 +122,7 @@ class UtarLoginWindow:
             activebackground="#2e5fb5",
             relief="flat",
             cursor="hand2",
+            command=lambda: threading.Thread(target=run_logic, args=(self, self.log_progress), daemon=True).start(),
             pady=8,
             padx=20
         )
@@ -219,17 +225,56 @@ class UtarLoginWindow:
         except tk.TclError:
             pass
 
+    def get_rounded_square_points(self, cx, cy, size, radius, angle_deg):
+        points = []
+        angle_rad = math.radians(angle_deg)
+        cos_a = math.cos(angle_rad)
+        sin_a = math.sin(angle_rad)
+        
+        corners = [
+            (size - radius, size - radius, 0),
+            (-size + radius, size - radius, 90),
+            (-size + radius, -size + radius, 180),
+            (size - radius, -size + radius, 270)
+        ]
+        
+        num_points_per_corner = 6
+        for cx_c, cy_c, start_angle in corners:
+            for i in range(num_points_per_corner + 1):
+                theta = math.radians(start_angle + (i * 90 / num_points_per_corner))
+                x = cx_c + radius * math.cos(theta)
+                y = cy_c + radius * math.sin(theta)
+                
+                rx = x * cos_a - y * sin_a
+                ry = x * sin_a + y * cos_a
+                
+                points.append(cx + rx)
+                points.append(cy + ry)
+                
+        return points
+
     def animate_spinner(self):
         if not self.animating:
             return
         try:
             self.canvas.delete("spinner")
-            # Draw subtle gray background circle
-            self.canvas.create_oval(5, 5, 45, 45, outline="#f0f0f0", width=3, tags="spinner")
-            # Draw blue active spinning arc
-            self.canvas.create_arc(5, 5, 45, 45, start=self.spinner_angle, extent=60, outline="#1D4B9E", width=3, style="arc", tags="spinner")
-            self.spinner_angle = (self.spinner_angle - 10) % 360
-            self.root.after(30, self.animate_spinner)
+            t = time.time()
+            
+            duration = 2.0
+            p = (t % duration) / duration
+            
+            eased_p = (1 - math.cos(math.pi * p)) / 2
+            
+            angle = eased_p * 360
+            radius_factor = 0.06 + 0.44 * math.sin(math.pi * eased_p)
+            
+            size = 12
+            radius = size * radius_factor
+            
+            points = self.get_rounded_square_points(25, 25, size, radius, angle)
+            
+            self.canvas.create_polygon(points, fill="#1D4B9E", smooth=False, tags="spinner")
+            self.root.after(16, self.animate_spinner)
         except tk.TclError:
             pass
 
@@ -415,7 +460,11 @@ def scan_and_connect(target_ssid: str, log_callback=None) -> bool:
                 time.sleep(2)
                 subprocess.run(["netsh", "wlan", "connect", f"name={target_ssid}"], capture_output=True, check=True)
                 time.sleep(5)
-                return True
+                if get_current_ssid() == target_ssid:
+                    return True
+                else:
+                    log(f"[!] Error: Could not connect to '{target_ssid}'. Please make sure you are in range and WiFi is turned on.")
+                    return False
             except:
                 log(f"[!] Error: Could not connect to '{target_ssid}'. Please make sure you are in range and WiFi is turned on.")
                 return False
@@ -428,7 +477,8 @@ def check_internet() -> bool:
     try:
         # A status code of 204 means we have direct internet access.
         # Captive portals will either redirect (302) or return a login page (200).
-        resp = requests.get("http://connectivitycheck.gstatic.com/generate_204", timeout=5, allow_redirects=False)
+        # We use a strict timeout tuple (connect=1.0s, read=1.5s) to kill DNS hangs quickly.
+        resp = requests.get("http://connectivitycheck.gstatic.com/generate_204", timeout=(1.0, 1.5), allow_redirects=False)
         return resp.status_code == 204
     except Exception:
         return False

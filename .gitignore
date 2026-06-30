@@ -19,6 +19,11 @@ utarwifihelper.onefile-build/
 # Private credentials configuration (CRITICAL!)
 config.json
 
+# Media references & Nuitka reports
+*.mp4
+nuitka-crash-report.xml
+scratch/
+
 # Temporary files
 *.tmp
 *.log
