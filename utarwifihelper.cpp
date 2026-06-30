@@ -638,12 +638,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
         SendMessageW(g_hwndPass, 0x1501, FALSE, (LPARAM)L"Password");
 
         g_hwndLoginBtn = CreateWindowExW(0, L"BUTTON", L"Log In", WS_CHILD | BS_OWNERDRAW, 40, 210, 264, 36, hwnd, (HMENU)ID_BTN_LOGIN, NULL, NULL);
-        g_hwndRetryBtn = CreateWindowExW(0, L"BUTTON", L"Retry Connection", WS_CHILD | BS_OWNERDRAW, 100, 290, 144, 36, hwnd, (HMENU)ID_BTN_RETRY, NULL, NULL);
+        g_hwndRetryBtn = CreateWindowExW(0, L"BUTTON", L"Retry Connection", WS_CHILD | BS_OWNERDRAW, 100, 280, 144, 36, hwnd, (HMENU)ID_BTN_RETRY, NULL, NULL);
 
-        g_hwndStatusLabel = CreateWindowExW(0, L"STATIC", L"Checking internet...", WS_CHILD | SS_CENTER, 20, 220, 304, 50, hwnd, NULL, NULL, NULL);
+        g_hwndStatusLabel = CreateWindowExW(0, L"STATIC", L"Checking internet...", WS_CHILD | SS_CENTER, 20, 180, 304, 80, hwnd, NULL, NULL, NULL);
         SendMessageW(g_hwndStatusLabel, WM_SETFONT, (WPARAM)g_hFontStatus, TRUE);
 
-        g_hwndFooter = CreateWindowExW(0, L"STATIC", L"Open Source on GitHub • Developed by @khor0000\nNot affiliated with UTAR", WS_CHILD | WS_VISIBLE | SS_CENTER | SS_NOTIFY, 0, 370, 344, 30, hwnd, (HMENU)201, NULL, NULL);
+        g_hwndFooter = CreateWindowExW(0, L"STATIC", L"Open Source on GitHub • Developed by @khor0000\nNot affiliated with UTAR", WS_CHILD | WS_VISIBLE | SS_CENTER | SS_NOTIFY, 0, 360, 344, 30, hwnd, (HMENU)201, NULL, NULL);
         SendMessageW(g_hwndFooter, WM_SETFONT, (WPARAM)g_hFontFooter, TRUE);
 
         // Preload config values
@@ -796,7 +796,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) 
             double radius = size * radius_factor;
 
             double cx = width / 2.0;
-            double cy = height / 2.0 - 40.0;
+            double cy = 120.0;
 
             std::vector<Gdiplus::PointF> points = GetRoundedSquarePoints(cx, cy, size, radius, angle);
 
