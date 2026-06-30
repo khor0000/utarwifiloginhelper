@@ -48,12 +48,11 @@ class UtarLoginWindow:
         self.root.configure(bg="white")
         self.root.resizable(False, False)
 
-        # Ensure it shows up in Alt+Tab and Taskbar (remove toolwindow)
-        # Use a blank icon to hide the feather
+        # Embed and set custom app icon (32x32 PNG)
+        icon_b64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAHcklEQVR4nG1WW8xdVRGeWWvvdfa5/TdaaWu0QFtpSBpFDWBsX2hi6gMaL4iobQiJQNBEWhJDiC+NTz6ZaEKiaEWrQcCERGKixku90EADYkgKUvhbK9Lr3/92LnvvtdbMmFn7/G017uycs8/Za32zZuabbwa33PhBSBciAggAMiIYAEb9E65cacFVl4joe9FHEDCAAsjSgOjLdGVX79BNYEDXJXQ0akI/9cd/m1NMTFtAGISFFXJtxQT9fw0IGN1lDIBRdGNFPxsza5b0eAleFBqFgQknNkgax6+yccVAQk+4YNHkYjMweqOxagNN40QKimBCB1Z04YgUkSNABIkshMD/xwPRIBswOdicrQPTwsxh5iDLwOaoNmzCB5OghQkoQgxAAWIQqoAviLqAWTTQKU2ZiKDGUsMCmIFxYgvM2ujakrc574ArMGscSgY07IxMECNED6HGUEEoIZQSLNgSSFKOY7NUPVB3ERGtmByyAvIutHpSTGf9azrT067bMUVhc2dyi8ZoiIg5RvaB68qPRuXKIKwumnKFNciTxIhmJTYh4nR2BLRiW5gV4HrSWdebnVvXhcJVrrCuV7S6uWsXucsAMfjoqzoMYz0MnuvK2qXWtYNLOYIIR2huiIllrCFK5DKiKc0ha0sx052a7ldvjxeXS5vlrshdC2yLMBdUAwbYSgSuQ1X6uhTyne4cTb97FD3EWsgj1oDqBoh6oIaVe5ihdZK1bW+28JdGF06htc65oae61e5t3Lhp83vm1s0iwqWF5bNvvzM8+69WPc54HKqqHq649a2yNxvrFQh6jpRUhc6YBU3iOFowueTdvFXQ4goFb8he5JnN7//IXZ++ffet29b1beMtIiwM+ffH3nzq2SOn/360FwcSoylXsukNIe9APRC0qZiVmk2SUw2iRZOh66DNBbEO7HvX3XnvPQ/u3Xnx3OCJX7xwfP5C6VUKui2zY+u1d9y+Y8+373/spzue+uGPXPmWFYLcoeuIyRoDiT1qIKEra5WmaFuQF8SG+td99RuPfGzX1m9959dHX56/6cPbd378ltm5HgIsLY3+duwf9z16+Labb/jKA3s2bnrXdw9+MzKYvMCsEMwVSusdEDTJiUWJRphq2FjnxfRn5q6Zm9r/8A+Wwe3e/2Vn4vMvvVqvjgGgmGq/b9dtG3fu+tOhJ7924PF9935iamZuXA5c5tA4gCvxEZGJvIAIqh/GiEU9Smfh5Ctf/8K+CwSbvrjv+V/9+Sf7Dy4ffXH31vW7t65fPvrijw8c/Mtzf9xw976LjA/f/aWFk6/k7Q6CwbQdRTOV9FQrWb/UHxZkQEJLQDaTaimvh37h1InHH6sXB9d/5vOfu6n95JHXLcJde/ccerU6/4ffLM+fwOGZvP6nQA9NZkkMIXOKOoumVnkNDKocjXKxFYQ+aq0SoDXLLzwtdqp33+Ez/158qz889szPQPhDNxy4eNbkt9yx9P29QCuZy5hEmNGTDRxZQCugEf+UA00xCxBjJOMDVCGWpXBkikmt65WfP7pl+wc23vrJB++/x6H0+r3+/HNn3ng5s7XmMUa0FMrKFQFDxEBILMyaAa1kxiQhKrxJvyLU3o9XmYNKvBgL48E7r9/5yEMPffbm+fPXDwl+6We2nV08feSw7UTh1PyYQjmUjkcfgKIKraJrkJSmKqiqTqzovpa6iuWqUEwEEwQ2bnq5lPMRnjj09LPneO5TD9ghGNdmWmlaI0qkciBVDaFWA0QacCUOpzrQRSruYjyEkqtRrAe8gsVJ3BkoeobfHa/fmLqxm+GZl8qpEaqoCl0uqFgPpCrFV0JBhEBIUwyQsdrRbABHIU9+ZEJXQloEul85wKPXjp94jTbP+/dmubGL51dPz0sci9UDJJaTxCi+ojAi8sBBAVMEskkDFGLwhuoYBq6edfl0KWTWaqXI6K/PfK+Y+y0am1oth0unDMamNaMa4dxOgY8hrALXIoGliXAjFRpIYgkENdI4lAv9zpaye84Pzxite61PBxwvnkxVCgBkDIvtgXiQwBBdZ0O/tdWPF4RK5prZJ/breJL6gbpJgEG4Zix9WGpV+fqZj666N31YQds2bsq6ftbqmiwHEYqB6iH5AflV4KqVz0y1t3FdhrBErAYEoqQcgGjLvDwOEWMNSjus6ws5z+60t0PPaMfPtC2jzdLMAZKLOG3IHCukCCShvJTQR8xjgXqCnhS06WiYBg1MsWt6tYiEGAcm61nbMbalg4xOFamNpKIR1kmCqCQaMpfEFXPJUrF4QEpaoSxPY0sKVtM5BXwqQDLijdTIo4A5mhwn6Gms0kOlwtRMBj0We4UGLxAEKTFQJz3taAkdmRlV8KyyGlk5AJ4pR8z0pjX0ZmzRRc0BSdRGukGpKdqISTv+2vCoWqSTEaZZDQhRUHSOTacI+twMZKB9tdmVvEh6loKg3iTOJEXTO1E3CcUkRPqrGXdNyg9rb5h037WZV/eswTcD9ZWJtsnn5Yijala0J+GR0TI8pz8I6bujSyetEAFxDv9xcrx7hJ2y5Ym6yevLnfwDCizJ7fHz7lwAAAABJRU5ErkJggg=="
         try:
-            blank_icon = tk.PhotoImage(width=1, height=1)
-            blank_icon.put(("white",), to=(0, 0)) # Makes it a tiny dot
-            self.root.iconphoto(False, blank_icon)
+            app_icon = tk.PhotoImage(data=icon_b64)
+            self.root.iconphoto(True, app_icon)
         except:
             pass
 
