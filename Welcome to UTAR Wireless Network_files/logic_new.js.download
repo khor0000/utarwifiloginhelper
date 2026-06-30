@@ -1,0 +1,5047 @@
+﻿/*-------------------------------------------------------
+这个文件主要处理各种按钮的事件和校验，请求逻辑,还有几个辅助函数
+定制一般不需要改这个文件
+---------------------------------------------------------*/
+//全局变量(g_前缀,这些做定制时都不能变)
+var g_pstrength, //修改密码时用的密码强度，由initPstrength初始化
+	g_querylogutUrl = "/out.htm",
+	g_querytTime = 3, //3秒心跳
+	g_queryEffect = true, //心跳机制是否处于生效状态
+	g_remberTime = 2592000, //30*24*3600 s
+	g_smsackUrl = "/sms_ack/",
+	g_url = "../login.php";
+
+var g_regUrl = '../register.php'; //注册和完善信息请求url
+var g_forgetUrl = '../forget_password.php'; //忘记密码请求url
+var g_forgetToken; //忘记密码页面第一步点击提交时获取的token，用来修改密码
+
+var g_WXscan_enable = false;
+var g_WXscanOpenID; //微信扫码认证pc端，定时请求扫码结果，如果返回的status===1，则需要保存openid用于跳转到账号密码登录时使用
+var g_wxscan_mobile_openid,//微信扫码认证手机端，页面初始化的时候从参数中拿openid，如果有openid
+	g_wxscan_mobile_bind_controller_type,
+	g_wxscan_mobile_bind_controller_id,
+	g_wxscan_mobile_bind_ip;
+
+var g_wxscan_closeLocal = false;   //是否开启微信绑定后关闭本地密码认证
+var g_user_phone;      //记录短信验证手机号
+
+var REG_SERECT_VALID = /[?&]secret=([^&#]+)/;   // 获取返回url中的秘钥信息
+var SECOND_AUTH_AESCDC_KEY = CryptoJS.enc.Utf8.parse('1L220d311mntUj4N');  //二次认证相关的加密的key密钥
+var BACK_DELY_TIMEOUT = 3 * 1000;    // 超时返回首次认证/关闭弹窗的延时时间
+var RANDOM_NUM = 16;         // 随机生成16位的随机数
+var MAX_PHONE_NUM = 20;      // 手机号码最大长度为20
+var currentAjax = null;
+var PREVIEW_TYPE = {
+	pc: 'pc',
+	mobile: 'mobile'
+}
+
+
+// 获取密钥弹窗显示的
+var creditSecretConst = {
+	smsAuth: 'sms-auth',
+	pwdAuth: 'pwd-auth'
+};
+
+//不同场景下验证码cookie名称
+var TYPE_TIME = {
+	//注册页面手机验证码
+	regphone: {
+		time: "regPhoneRemainTime",
+		span: "regPhoneRemainTimeSpan"
+	},
+	//注册页面邮箱验证码
+	regmail: {
+		time: "regMailRemainTime",
+		span: "regMailRemainTimeSpan"
+	},
+	//完善信息页面手机验证码
+	comphone: {
+		time: "comPhoneRemainTime",
+		span: "comPhoneRemainTimeSpan"
+	},
+	//完善信息页面邮箱验证码
+	commail: {
+		time: "comMailRemainTime",
+		span: "comMailRemainTimeSpan"
+	},
+	//短信快捷登录验证码
+	fastphone: {
+		time: "fastRemainTime",
+		span: "fastRemainTimespan"
+	},
+	//会议室二维码pc端信息项手机验证码
+	mtqrcodeinfo: {
+		time: "mtqrcodePhoneRemainTime",
+		span: "mtqrcodePhoneRemainTimeSpan"
+	},
+	//终端自注册完善信息页面手机验证码
+	comInfophone: {
+		time: "comInfoPhoneRemainTime",
+		span: "comInfoPhoneRemainTime"
+	},
+	//终端自注册完善信息页面邮箱验证码
+	comInfomail: {
+		time: "comInfoMailRemainTime",
+		span: "comInfoMailRemainTime"
+	},
+	//忘记密码页面
+	forgetpwd: {
+		time: "forgetpwdPhoneRemainTime",
+		span: "forgetpwdPhoneRemainTimeSpan"
+	}
+}
+
+
+var oriTabs; //用户保存底部的所有icon
+var nowTab; //当前选中的tab，即当前展示的认证方式
+var g_infoback; //复制注册或完善信息页面的字段属性，用于提交数据时使用
+var g_infoback_qrcode; //复制访客二维码认证信息项的字段属性，用于提交数据时使用
+var g_infoback_mtqrcode = []; //复制会议室二维码认证信息项的字段属性，用于提交数据时使用
+var g_other_oauth_icon = '../share/res/extended_file/css/img/otherLarge.png'; //第三方oauth认证获取的动态图标
+var g_saml_icon = '../share/res/extended_file/css/img/samlLarge.png';// saml认证的默认图标
+var TYPE_TEXT = {};
+var ATTR_TEXT = {
+    username: "Username",
+    password: "Password",
+    mobile: "Mobile Number",
+    email: "Email Address"
+}
+
+var AuthTypeMap = {
+	//双因素动态码认证
+	twoAuthOtp: {
+		authId: 'two-auth-mode_dynamicCode',
+		inputId: 'two-auth-mode_code',
+		loginParams: {
+			opr: 'verifyOtpCode',
+			pwd: '',
+		},
+		loginBtn: 'two-auth-mode_submitBtn'
+	},
+}
+
+// 兼容IE8，发送Referrer头
+function openHref(url, isOpenByALink) {
+    var isPreview = (window.top.location.search.indexOf('is_preview') !== -1);
+    
+    // 预览下拦截所有跳转
+    if (isPreview) {
+    	return;
+	}
+	
+    var navStr = navigator.userAgent.toLowerCase(),
+        isIE8 = navStr.indexOf("msie 8") > 0;
+    // 手机上特殊处理这两种认证（需要a标签才能拉起）
+    if (changeA() && (url.indexOf('auth_type=gmail') > -1 || url.indexOf('auth_type=dingtalk') > -1)) {
+        isOpenByALink = true;
+    }
+
+    //修复在第三方系统打开ac的时候由于走https代理而导致页面打开失败问题,完整路径保证协议一致性，非完整路径补全为完整路径
+    //这里解决不彻底也没其他方案^^
+    if(url.match(location.protocol.indexOf('https') > -1)) {
+        url = url.replace(/^(http):/, location.protocol);
+    } else if (url.match(/^\//) && url.indexOf('ac_portal') > -1) { //这里要考虑还会不会有其它情况，目前其它情况走原有的逻辑
+        url = location.href.replace(/\/ac_portal.+$/, "") + url;
+    }
+
+	//如果是saml认证，则将get_auth_url替换成saml_auth_req
+	if(url.indexOf('auth_type=saml')  > -1 ) {
+		url = url.replace('get_auth_url', 'saml_auth_req');
+	}
+
+    if (isIE8 || isOpenByALink) {
+        var referLink = document.createElement('a');
+        referLink.href = url;
+        document.body.appendChild(referLink);
+        referLink.click();
+    } else {
+        location.href = url;
+    }
+}
+//cookie
+var cookie = {
+	set: function(name, value, time) {
+		var cur = new Date();
+		/*cookie的生命时长设置为60秒*/
+		if (time === undefined) {
+			time = 60;
+		}
+		cur.setTime(cur.getTime() + time * 1000);
+		document.cookie = name + "=" + escape(value) + ";expires=" + cur.toGMTString();
+	},
+	get: function(name) {
+		if (document.cookie.length > 0) {
+			var arrStr = document.cookie.split(";");
+			for (var i = 0; i < arrStr.length; i++) {
+				var temp = arrStr[i].split("=");
+				if ($.trim(temp[0]) === name) {
+					return unescape(temp[1]);
+				}
+			}
+		}
+		return "";
+	}
+};
+//ie6,7不支持indexof,加上这个功能
+Array.prototype.indexOf = function(obj, start) {
+	for (var i = (start || 0), j = this.length; i < j; i++) {
+		if (this[i] === obj) {
+			return i;
+		}
+	}
+	return -1;
+}
+//html编码
+function htmlEncode(value) {
+	return !value ? value : String(value).replace(/&/g, "&amp;").replace(/>/g, "&gt;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+}
+
+//html解码
+function htmlDecode(value) {
+	return !value ? value : String(value).replace(/&amp;/g, "&").replace(/&gt;/g, ">").replace(/&lt;/g, "<").replace(/&quot;/g, "\"");
+}
+
+// 简写方法
+function $id(id) {
+	return document.getElementById(id);
+}
+
+//转换json
+function json_decode(str) {
+	var json = null;
+	try {
+        str = str.replace(/[\r\n]/g, '');
+		json = eval("(" + str + ')');
+	} catch (e) {}
+	return json;
+}
+
+//获取url参数
+function getUrlParam(val, isDecode) {
+	var reg = new RegExp("(^|\\?|&)" + val + "=([^&#]*)(\\s|&|$|#)", "i");
+	var param = '';
+	if (reg.test(location.href)) {
+		if (isDecode || val === 'username') {
+			param = decodeURIComponent(RegExp.$2);
+		} else {
+			param = decodeURIComponent(RegExp.$2);
+		}
+	}
+	
+	return param || '';
+}
+
+//生成随机数的函数
+function randomNum(minNum, maxNum) {
+	switch (arguments.length) {
+		case 1:
+			return parseInt(Math.random() * minNum + 1, 10);
+			break;
+		case 2:
+			return parseInt(Math.random() * (maxNum - minNum + 1) + minNum, 10);
+			break;
+		default:
+			return 0;
+			break;
+	}
+}
+
+
+//---------------校验代码------------->>
+
+//初始化修改密码强度变量(不用改动)
+function initPstrength() {
+	var safariid = getUrlParam('safariid');
+	safariid = safariid.toString();
+
+	if (safariid !== "1") {
+		$.ajax({
+			url: "/passwordstrength",
+			type: "GET",
+			success: function(resp) {
+				var json = json_decode(resp);
+				if (json) {
+					g_pstrength = json;
+				} else {
+					//alert(_("Password does not meet strength requirement."));
+				}
+			},
+			error: function(o) {
+				//alert(_("Failed to load password strength due to network error."));
+			}
+		})
+	}
+}
+
+//修改密码的提示方法
+function setChangePwdTips(msg) {
+	js_alert("mode_changePwd", msg);
+}
+//修改密码的提示方法
+function setSmsTips(type, msg) {
+	if (type === 'sms') {
+		js_alert("mode_sms", msg);
+	} else {
+		js_alert("mode_mobile", msg);
+	}
+
+}
+//修改密码的提示方法
+function setPasswordTips(msg) {
+	js_alert("mode_password", msg);
+}
+
+//密码登录的校验
+function pwdValidtor() {
+	var user = $id("password_name"),
+		checked = $id("password_disclaimer") ? $id("password_disclaimer").checked : false,
+		pwd = $id("password_pwd");
+
+	if ((user.value.length <= 0) || (pwd.value.length <= 0)) {
+		valid = false;
+		setPasswordTips(_("Username or password are required."));
+		return false;
+	} else if (user.value.length > 95) {
+		setPasswordTips(_("Username cannot exceed 95 characters."));
+		return false;
+	} else if (window.g_hasDisclaimer && !checked) {
+		setPasswordTips(_("Please read and accept the Terms of Use."));
+		return false;
+	}
+	setPasswordTips("");
+	return true;
+}
+
+//获取验证码时的校验,主要检查手机号格式，包含原短信认证和现在的短信快捷登录
+function getSmsCodeValidtor(type) {
+	var user,
+		Regx = /^[0-9]*$/;
+
+	if (type === 'fastmobile') {
+		user = $id("mobilefast_name");
+	} else {
+		user = $id("sms_name");
+	}
+
+	if (user.value.length <= 0) {
+		setSmsTips(type, _("Mobile phone number is required."));
+		return false;
+	} else if (user.value.length > 20) {
+		setSmsTips(type, _("Mobile phone number cannot exceed 20 characters."));
+		return false;
+	} else if (!Regx.test(user.value)) {
+		setSmsTips(type, _("Phone number should contain digits only"));
+		return false;
+	}
+	return true;
+}
+
+//短信认证时的校验
+function smsValidtor(type) {
+	if (!getSmsCodeValidtor(type)) return false;
+	var pwd;
+	var checked = true;
+	if (type !== 'fastmobile') {
+		pwd = $id("sms_pwd").value;
+		checked = $id("sms_disclaimer") ? $id("sms_disclaimer").checked : true;
+	} else {
+		pwd = $id("mobilefast_pwd").value;
+		checked = $id("sms_fast_disclaimer") ? $id("sms_fast_disclaimer").checked : true;
+	}
+	if (pwd === "") {
+		setSmsTips(type, _("Please enter the verification code."));
+		return false;
+	}
+	if (window.g_hasDisclaimer && !checked) {
+		setSmsTips(type, _("Please read and accept the Terms of Use."));
+		return false;
+	}
+	setSmsTips(type, "");
+	return true;
+}
+
+//修改新密码的时候，对密码强度的修改
+function validatePasswordStrength(type) {
+	if (g_pstrength && g_pstrength.enable) {
+		if (type === 'change') {
+			var user = $id("changePwd_name").value.toLowerCase();
+			var pwd = $id("changePwd_oldPwd").value;
+			var pwd1 = $id("changePwd_newPwd").value;
+			if (g_pstrength.noequalname) {
+				if (user && pwd1 == user) {
+					setChangePwdTips(_("Password and username must not be the same"));
+					return false;
+				}
+			}
+			if (g_pstrength.noequalold) {
+				if (pwd && pwd1 == pwd) {
+					setChangePwdTips(_("New password must be different from the current password."));
+					return false;
+				}
+			}
+			if (g_pstrength.limit.enable && g_pstrength.limit.minlen > 1) {
+				if (pwd1.length < g_pstrength.limit.minlen) {
+					setChangePwdTips(_("Password should contain at least ") + g_pstrength.limit.minlen + _(" characters."));
+					return false;
+				}
+			}
+			if (g_pstrength.must.enable) {
+				if (g_pstrength.must.num && pwd1.search(/\d/) == -1) {
+					setChangePwdTips(_("Password must contain digit."));
+					return false;
+				}
+				if (g_pstrength.must.alph && pwd1.search(/[A-Za-z]/) == -1) {
+					setChangePwdTips(_("Password must contain letter."));
+					return false;
+				}
+				if (g_pstrength.must.special && pwd1.search(/[!@#\$%\^&\*\(\)]/) == -1) {
+					setChangePwdTips(_("Password must contain special characters (Shift+ digit)."));
+					return false;
+				}
+			}
+			return true;
+		} else if (type === 'forget') {
+			var pwd = $id("find_pwd_pwd").value;
+			var pwd1 = $id("find_pwd_pwdcon").value;
+			if (g_pstrength.limit.enable && g_pstrength.limit.minlen > 1) {
+				if (pwd1.length < g_pstrength.limit.minlen) {
+					js_alert("mode_forgetPwd", _("Password should contain at least ") + g_pstrength.limit.minlen + _(" characters."));
+					return false;
+				}
+			}
+			if (g_pstrength.must.enable) {
+				if (g_pstrength.must.num && pwd1.search(/\d/) == -1) {
+					js_alert("mode_forgetPwd", _("Password must contain digit."));
+					return false;
+				}
+				if (g_pstrength.must.alph && pwd1.search(/[A-Za-z]/) == -1) {
+					js_alert("mode_forgetPwd", _("Password must contain letter."));
+					return false;
+				}
+				if (g_pstrength.must.special && pwd1.search(/[!@#\$%\^&\*\(\)]/) == -1) {
+					js_alert("mode_forgetPwd", _("Password must contain special characters (Shift+ digit)."));
+					return false;
+				}
+			}
+		}
+		
+	} else {
+		return true;
+	}
+}
+//忘记密码时的校验
+function forgetPwdValidator() {
+	var pwd1 = $id("find_pwd_pwd"),
+		pwd2 = $id("find_pwd_pwdcon");
+	if (pwd1.value.length > 39 || pwd1.value.length === 0) {
+		js_alert("mode_forgetPwd", _("Password is required and should contain at least 40 characters."));
+		return false;
+	} else if (pwd1.value !== pwd2.value) {
+		js_alert("mode_forgetPwd", _("The new passwords should be the same."));
+		return false;
+	}
+	//密码强度校验
+	if (validatePasswordStrength('forget') === false) {
+		return false;
+	}
+	js_alert("mode_forgetPwd", "");
+	return true;
+}
+//修改密码时的校验
+function changePwdValidtor() {
+	var user = $id("changePwd_name"),
+		password = $id("changePwd_oldPwd"),
+		pwd1 = $id("changePwd_newPwd"),
+		pwd2 = $id("changePwd_newPwd2");
+	if (user.value.length <= 0) {
+		setChangePwdTips(_("Username is required."));
+		return false;
+	} else if (user.value.length > 95) {
+		setChangePwdTips(_("Username cannot exceed 95 characters."));
+		return false;
+	} else if (pwd1.value.length > 39 || pwd1.value.length === 0) {
+		setChangePwdTips(_("Password is required and should contain at least 40 characters."));
+		return false;
+	} else if (pwd1.value !== pwd2.value) {
+		setChangePwdTips(_("The new passwords should be the same."));
+		return false;
+	}
+	//密码强度校验
+	if (validatePasswordStrength('change') === false) {
+		return false;
+	}
+	setChangePwdTips("");
+	return true;
+}
+//注册和完善信息页面提交之前的校验
+function regestAndCompleteValidator(type) {
+	//校验主要包括三种，一种是提交之前发请求校验，另一种是请求返回后校验，第三种是前端直接校验
+	//提交之前发请求：   1.手机号码、用户名、邮箱校验----------已在失去焦点时校验
+	//请求返回校验	   1.手机短信验证码 2.邮箱验证码--------提交先发请求校验
+	//前端直接校验	   1.两次密码是否输入一致 2.密码长度和类型校验--------已在失去焦点时校验
+
+	var phone,
+		email,
+		username,
+		smsCode,
+		emailCode,
+		regPwd,
+		regPwdCon;
+	if (type === 'regest') {
+		phone = $("#regest_mobile_attr").val();
+		
+		email = $("#regest_email_attr").val();
+		
+		username = $("regest_username").val();
+		smsCode = $("regest_sms_code").val();
+		emailCode = $("regest_email_code").val();
+		regPwd = $("#regest_password").val();
+		regPwdCon = $("#regest_password_confirm").val();
+	} else if (type === 'complete') {
+		phone = $("#complete_mobile_attr").val();
+		email = $("#complete_email_attr").val();
+		username = $("complete_username").val();
+		smsCode = $("complete_sms_code").val();
+		emailCode = $("complete_email_code").val();
+	}
+	if (typeof($('#' + type + 'DomainList').val()) != 'undefined') {
+		email = email + $('#' + type + 'DomainList').val();
+	}
+	//校验密码长度
+	// if (regPwd.length < 6 || regPwd.length > 16) {
+	// 	if (type === 'regest') {
+	// 		js_alert("mode_regestUser", _("密码设置应为6-16个字符"));
+	// 		return false;
+	// 	} else {
+	// 		js_alert("mode_complete", _("密码设置应为6-16个字符"));
+	// 		return false;
+	// 	}
+	// }
+	// //校验两次密码输入是否一致
+	// if (regPwd !== regPwdCon) {
+	// 	if (type === 'regest') {
+	// 		js_alert("mode_regestUser", _("确认密码不一致！"));
+	// 		return false;
+	// 	} else {
+	// 		js_alert("mode_complete", _("确认密码不一致！"));
+	// 		return false;
+	// 	}
+	// }
+	// checkPhoneEmailUserVal(type, "mobile", phone);
+	// checkPhoneEmailUserVal(type, "email", email);
+	// checkPhoneEmailUserVal(type, "user", username);
+}
+//根据type类型返回formid
+function setRegestType (type) {
+	var formid;
+	if (type === "regest") {
+		formid = "mode_regestUser";
+	} else if (type === "complete") {
+		formid = "mode_complete";
+	} else if (type === 'completeInfo') {
+		formid = "mode_complete_userInfo";
+	}
+	return formid;
+}
+//校验注册和完善信息页面手机号码、邮箱、用户名
+function checkPhoneEmailUserVal(type, inputType, inputVal) {
+	var params = {},
+		formid = setRegestType(type);
+	if (inputType === 'mobile') {
+		params.opr = "checkPhone";
+		params.phone = inputVal;
+	} else if (inputType === 'email') {
+		params.opr = "checkMail";
+		params.mail = inputVal;
+	} else if (inputType === 'user') {
+		params.opr = "checkUserName";
+		params.username = inputVal;
+	}
+	$.ajax({
+		url: g_regUrl,
+		data: params,
+		type: "POST",
+		success: function(json) {
+			var json = json_decode(json);
+			if (json.success) {
+				js_alert(formid, '');
+				return true;
+			} else {
+				//校验不通过，显示不符合的输入项信息
+				dealRegestAndCompleteValidate(type, json);
+				return false;
+			}
+		},
+		error: function(o) {
+			var formid;
+			formid = setRegestType(type);
+			js_alert(formid, o.msg || _('Network connection error occurred.'));
+		}
+	})
+}
+//提交注册或完善信息表单提交时后台返回的校验
+function dealRegestAndCompleteValidate(type, json) {
+	var formid;
+	formid = setRegestType(type);
+	js_alert(formid, json.msg);
+
+}
+
+//密码登录，密码登录按钮事件
+function onWXscanBind() {
+	var userVal = $id("wxscan_name").value,
+		pwdVal = $id("wxscan_pwd").value;
+
+	if ((userVal.length <= 0) || (pwdVal.length <= 0)) {
+		js_alert("mode_wxscanAccount", _("Username or password are required."));
+		return false;
+	} else if (userVal.length > 95) {
+		js_alert("mode_wxscanAccount", _("Username cannot exceed 95 characters."));
+		return false;
+	}
+	js_alert("mode_wxscanAccount", '');
+	var rckey = +(new Date()) + '';
+	var pwd = do_encrypt_rc4(pwdVal, rckey);
+	var params = {
+		opr: 'pwdLogin', //smsLogin表示短信认证登录,pwdLogin表示密码认证登录
+		userName: userVal,
+		pwd : pwd,
+		auth_tag: rckey,
+		rememberPwd: $id("rememberPwd") && $id("rememberPwd").checked ? '1' : '0'
+	};
+	if (g_WXscanOpenID) {
+		params.openid = g_WXscanOpenID;
+	}
+	if (g_wxscan_mobile_openid) {
+		params.openid = g_wxscan_mobile_openid;
+		params.controller_type = g_wxscan_mobile_bind_controller_type;
+		params.ip = g_wxscan_mobile_bind_ip;
+		params.controller = g_wxscan_mobile_bind_controller_id;
+	}
+	var btn = $id("wxscanAccount_submitBtn");
+	var $btn = $(btn);
+	$btn.addClass('disabled');
+	btn.orgValue = btn.value;
+
+	//成功后干啥
+	function fn(o) {
+		btn.disabled = false;
+		$btn && $btn.removeClass('disabled');
+		if (!o || !o.success) {
+			js_alert("mode_wxscanAccount", o.msg);
+			return;
+		}
+		//登录成功后启用或关闭心跳状态
+		enablePop(o.pop);
+		
+		//取登录成功后的用户名
+		var username = userVal;
+		if (o.userName) {
+			username = encodeURIComponent(htmlDecode(o.userName));
+		}
+		
+		var exParams = "userName="+username+"&pwd="+pwd+"&auth_tag="+rckey;
+		if (changeA()) {
+			var url = window.location.href + (window.location.search != "" ? "&" : "?") + "safariid=2&" + exParams;
+		    var link = document.getElementById("wxcan_link");
+		    if (!link) {
+		        $('body').append('<a id="wxcan_link" href="javascript:void(0);" style="display:none;position:absolute;" target="_blank"></a>');
+		        link = document.getElementById("wxcan_link");
+		    }
+		    if (link) {
+		        link.href = url;
+		        link.click();
+		    }
+		} else {
+			callWechatBrowser('WXscan', exParams);
+		}
+	}
+
+	$ajax(params, "mode_wxscanAccount", function(o) {
+		fn(o);
+	}, btn, function() {
+		$btn.removeClass('disabled');
+	}, false);
+}
+//<<---------------校验代码-------------
+
+//---------------按钮事件和请求的绑定(定制一般不用改动)------------->>
+
+//密码登录，密码登录按钮事件
+function onPwdLogin() {
+	if (!pwdValidtor()) return;
+	if ($id("flux")) {
+		$id("flux").href = "https://" + document.domain + "/cgi-bin/showflux.cgi?user=" + encodeURIComponent($id("password_name").value);
+	}
+	var rckey = +(new Date()) + '';
+	var pwd = do_encrypt_rc4($id("password_pwd").value, rckey);
+	var params = {
+		opr: 'pwdLogin', //smsLogin表示短信认证登录,pwdLogin表示密码认证登录
+		userName: $id("password_name").value,
+		pwd : pwd,
+		auth_tag: rckey,
+		rememberPwd: $id("rememberPwd").checked ? '1' : '0'
+	};
+	if (g_WXscanOpenID) {
+		params.openid = g_WXscanOpenID;
+	}
+	if (g_wxscan_mobile_openid) {
+		params.openid = g_wxscan_mobile_openid;
+		params.controller_type = g_wxscan_mobile_bind_controller_type;
+		params.ip = g_wxscan_mobile_bind_ip;
+		params.controller = g_wxscan_mobile_bind_controller_id;
+	}
+	loginRequest(params, "mode_password", $id("password_submitBtn"));
+}
+//修改密码，确定按钮事件
+function onChangePwd() {
+	if (!changePwdValidtor()) return;
+	var rckey = +(new Date()) + '';
+	var oldPwd = do_encrypt_rc4($id("changePwd_oldPwd").value, rckey);
+	var newPwd = do_encrypt_rc4($id("changePwd_newPwd").value, rckey);
+	var params = {
+		opr: 'changePwd',
+		userName: $id("changePwd_name").value,
+		auth_tag: rckey,
+		oldPwd:oldPwd,
+		newPwd:newPwd
+	};
+	changePwdRequest(params, "mode_changePwd", $id("changePwd_submitBtn"))
+}
+//会议室二维码pc端输入二维码ID之后的处理
+function onMtQrcode() {
+	var r = randomNum(0, 99),
+		t = (new Date()).getTime(),
+		c = r * t;
+	var qcid = $("#mtqrcode_id").val(),
+		ip = getUrlParam("ip"),
+		controller_type = getUrlParam("controller_type"),
+		id = getUrlParam("_ID_");
+	var url = '/ac_portal/mtqrcode.html?' + "&qcid=" + qcid + "&r=" + r + "&c=" + c + "&t=" + t + "&pc=1" + "&ip=" + ip + "&controller_type=" + controller_type + "&_ID_=" + id + "&flag=1";
+	$.ajax({
+		type: 'GET',
+		url: url,
+		success: function(json) {
+			var json = json_decode(json);
+			if (json.success) {
+                getMtQrcodeSysFields();
+			} else {
+				js_alert("mode_mtqrcode", json.msg || _("Network connection error occurred."));
+			}
+		},
+		error: function(json) {
+			js_alert("mode_mtqrcode", _("Network connection error occurred."));
+		}
+	});
+}
+
+//忘记密码第一步骤时点击下一步
+function onForgetFirstStep(stepsArr, num) {
+	var params = {
+		opr: 'checkAuthCode',
+		authCode: $("#find_pwd_code").val(),
+		userAccount: $("#find_pwd_username").val()
+	};
+	var mailReg = /^(\w-*\.*)+@(\w-?)+(\.\w{2,})+$/,
+		mobileReg = /^\d{1,20}$/;
+	if (!mailReg.test(params.userAccount) && !mobileReg.test(params.userAccount)) {
+		js_alert("mode_forgetPwd", _("Please enter a valid mobile phone number."));
+		return;
+	}
+	if (params.authCode === "") {
+		js_alert(mode_forgetPwd, _("Verification code"));
+		return;
+	}
+	$.ajax({
+		url: g_forgetUrl,
+		data: params,
+		type: "POST",
+		success: function(json) {
+			var json = json_decode(json);
+			if (json.success) {
+				$("#forget_second_step_username").attr('value', json.username);
+				g_forgetToken = json.token;
+				for (var i = 0; i < stepsArr.length; i++) {
+					if (i === num) {
+						stepsArr[i].show();
+					} else {
+						stepsArr[i].hide();
+					}
+				}
+			} else {
+				js_alert("mode_forgetPwd", json.msg || _("Network connection error occurred."));
+			}
+		},
+		error: function(o) {
+
+		}
+	});
+
+}
+//忘记密码时发送验证码事件
+function onForgetGetSmsCode() {
+	var params = {
+		opr: 'getAuthCode',
+		userAccount: $("#find_pwd_username").val()
+	}
+	cookie.set("forgetPwdPhoneNumber", $id("find_pwd_username").value, g_remberTime);
+	var codeBtnID = "forget_getSmsCode";
+	$.ajax({
+		url: g_forgetUrl,
+		data: params,
+		type: "POST",
+		success: function(json) {
+			var json = json_decode(json);
+			if (json.success) {
+				js_alert("mode_forgetPwd", _('One-time passcode (OTP) was sent.'));
+				afterGetAllCodeState({
+					success: true
+				}, {
+					
+				}, "mode_forgetPwd", $id(codeBtnID), 60, 'forgetpwd');
+			} else {
+				js_alert("mode_forgetPwd", json.msg || _('Network connection error occurred.'));
+			}
+		},
+		error: function(o) {
+			js_alert("mode_forgetPwd", _('Failed to send request.'));
+		}
+	});
+}
+//提交重置新密码的确定按钮
+function onForgetPwd() {
+	if (!forgetPwdValidator()) return;
+	var rckey = +(new Date()) + '';
+	var pwd = do_encrypt_rc4($id("find_pwd_pwd").value, rckey);
+	var pwdCon = do_encrypt_rc4($id("find_pwd_pwdcon").value, rckey);
+
+	var params = {
+		opr: 'updatePassword',
+		name: $("#find_pwd_username").val(),
+		password: pwd,
+		password_repeat: pwdCon,
+		auth_tag: rckey,
+		token: g_forgetToken
+	}
+	$.ajax({
+		url: g_forgetUrl,
+		data: params,
+		type: "POST",
+		success: function(json) {
+			json = json_decode(json);
+			if (json.success) {
+                countdown({
+					time: 3,
+					msgCallback: function(time){
+                        js_alert("mode_forgetPwd", _("Password was found. It goes back " + time + ' later.'));
+					},
+					callback: function(){
+                        activatePage('frontLogin');
+                        //$('#find_pwd_username').attr('value', '');
+                        //$('#find_pwd_code').attr('value', '');
+                        //$('#find_pwd_pwd').attr('value', '');
+                        //$('#find_pwd_pwdcon').attr('value', '');
+                        js_alert("mode_forgetPwd", '');
+                        moveToStep(0);
+                    }
+				});
+
+			} else{
+				js_alert("mode_forgetPwd", json.msg || _("Failed to find password."));
+			}
+		},
+		error: function(o) {
+			js_alert("mode_forgetPwd", _("Network connection error occurred. Please try again."));
+		}
+	});
+}
+function countdown(params){
+	var time = params.time;
+	if(time < 1){
+		return;
+	}
+    params.msgCallback && params.msgCallback.call(params.scope || {},time);
+	var intervalId = setInterval(function(){
+		time--;
+        params.msgCallback.call(params.scope || {},time);
+		if(time === 0){
+			clearInterval(intervalId);
+            params.callback && params.callback.call(params.scope || {});
+		}
+	}, 1000);
+}
+
+//会议室二维码信息项填写获取手机验证码函数
+function onGetMtQrcodeInfoCode() {
+	var phone = $id("mtqrcode_phone_attr") && $id("mtqrcode_phone_attr").value,
+		qcid = $id("mtqrcode_id") && $id("mtqrcode_id").value;
+	var url = '/ac_portal/qrc_sendsms.html?qcid=';
+	cookie.set("mtqrcodePhoneNumber", $id("mtqrcode_phone_attr").value, g_remberTime);
+	var codeBtnID = "mtqrcode_phone_attr_getSmsCodeBtn";
+	var ip = getUrlParam('ip');
+	$.ajax({
+		type: 'GET',
+		url: url + qcid + "&phone=" + phone + "&ip=" + ip,
+		success: function(json) {
+			// json = json_decode(json);
+			if (!json.success) {
+				js_alert("mode_mtqrcode_info", json.msg || _('Network connection error occurred.'));
+			} else {
+				//成功之后设置验证码倒计时
+				afterGetAllCodeState({
+					success: true
+				}, {
+					
+				}, "mode_mtqrcode_info", $id(codeBtnID), 60, 'mtqrcode');
+
+			}
+		},
+		error: function(json) {
+			js_alert("mode_mtqrcode_info", json.msg || _('Network connection error occurred.'));
+		}
+	});
+}
+//会议室二维码pc端提交数据
+function submitMtQrcodeInfo() {
+	var jsonData = {};
+	var type = 'mtqrcode';
+	var infoItem = g_infoback_mtqrcode;
+	var mobileReg = /^\d{1,20}$/;
+	var domReg = /^[^`~!#$%^&*()+=\\|{};:"',/<>?]*$/;
+	var mailReg = /^(\w-*\.*)+@(\w-?)+(\.\w{2,})+$/;
+	var formid = 'mode_mtqrcode_info';
+	for (var i = 0; i < infoItem.length; i++) {
+		var id = infoItem[i].id;
+		var name = infoItem[i].name;
+		var getAttrId = type + '_' + id + '_attr';
+		var attrValue = $id(getAttrId);
+		attrValue = attrValue && attrValue.value || '';
+		if (id === 'phone') {
+			jsonData["vcode"] = $id("mtqrcode_sms_code") && $id("mtqrcode_sms_code").value;
+		}
+		//提交之前进行校验
+		if (infoItem[i].request) {
+			if (id === 'phone') {
+				if (!mobileReg.test(attrValue)) {
+					js_alert(formid, _("Separator of mobile phone numbers is invalid."));
+					return;
+				}
+			}
+			else if (id === 'mail') {
+				if (!domReg.test(attrValue)) {
+			        js_alert(formid, _('It cannot contain any of the following special characters: ^[^`~!#$%^&*()+=\\|{};:\"\',/<>?]*$'));
+			        return;
+			    }
+			    if (!mailReg.test(attrValue)) {
+			    	js_alert(formid, _('It is not a valid email address.'));
+			        return;
+			    }
+			    if (attrValue.length > 63) {
+			    	js_alert(formid, _('It cannot exceed 63 characters.'));
+			    	return;
+			    }
+			} else if (attrValue === '') {
+				js_alert(formid, name + _(" is required."));
+				return false;
+			} else {
+				if (attrValue.length > 95) {
+					js_alert(formid, name + _(" cannot exceed 95 characters."));
+					return;
+				}
+                if (!domReg.test(attrValue)) {getloginSuccessJumpURL
+                    js_alert(formid, name + _('It cannot contain any of the following special characters: ^[^`~!#$%^&*()+=\\|{};:\"\',/<>?]*$'));
+                    return;
+                }
+			}
+		}
+		jsonData[id] = attrValue;
+	}
+
+	var r = randomNum(0, 99),
+		t = (new Date()).getTime(),
+		c = r * t;
+	var qcid = $("#mtqrcode_id").val();
+	var params = jsonData;
+	params.r = r;
+	params.t = t;
+	params.c = c;
+	params.ip = getUrlParam('ip');
+	params.qcid = qcid;
+	params.controller_type = getUrlParam('controller_type');
+	params._ID_ = getUrlParam('_ID_');
+
+	$.ajax({
+		url: '/ac_portal/mtqrcode.html',
+		type: 'POST',
+		data: params,
+		success: function(rep) {
+			var json = rep; //json_decode(rep);
+
+			if (json.success) {
+				httpscert_jump(getloginSuccessJumpURL(json.url, json.username));
+			} else {
+				js_alert("mode_mtqrcode_info", json.msg || _('Network connection error occurred.'));
+			}
+
+		},
+		error: function(rep) {
+			js_alert("mode_mtqrcode_info", _('Network connection error occurred.'));
+		}
+	});
+}
+//访客二维码提交信息项
+function submitQrcodeInfoItem(type) {
+	var infoItem = g_infoback_qrcode || [];
+	var jsonData = {};
+	var url = '/ac_portal/qr_uinfo.html';
+	var mobileReg = /^\d{1,20}$/;
+	var domReg = /^[^`~!#$%^&*()+=\\|{};:"',/<>?]*$/;
+	var mailReg = /^(\w-*\.*)+@(\w-?)+(\.\w{2,})+$/;
+	var formid = 'mode_qrcode_info';
+	//元素失去焦点时已进行过校验，直接获取元素的值进行提交即可
+	for (var i = 0; i < infoItem.length; i++) {
+		var id = infoItem[i].id;
+		var name = infoItem[i].name;
+		var getAttrId = type + '_' + id + '_attr';
+		var attrValue = $id(getAttrId);
+		attrValue = attrValue && attrValue.value || '';
+		//提交之前进行校验
+		if (infoItem[i].request) {
+			if (id === 'phone') {
+				if (!mobileReg.test(attrValue)) {
+					js_alert(formid, _("Separator of mobile phone numbers is invalid."));
+					return;
+				}
+			}
+			else if (id === 'mail') {
+				if (!domReg.test(attrValue)) {
+			        js_alert(formid, _('It cannot contain any of the following special characters: ^[^`~!#$%^&*()+=\\|{};:\"\',/<>?]*$'));
+			        return;
+			    }
+			    if (!mailReg.test(attrValue)) {
+			    	js_alert(formid, _('It is not a valid email address.'));
+			        return;
+			    }
+			    if (attrValue.length > 63) {
+			    	js_alert(formid, _('It cannot exceed 63 characters.'));
+			    	return;
+			    }
+			} else if (attrValue === '') {
+				js_alert(formid, name + _(" is required."));
+				return false;
+			} else {
+				if (attrValue.length > 95) {
+					js_alert(formid, name + _(" cannot exceed 95 characters."));
+					return;
+				}
+                if (!domReg.test(attrValue)) {
+                    js_alert(formid, name + _('It cannot contain any of the following special characters: ^[^`~!#$%^&*()+=\\|{};:\"\',/<>?]*$'));
+                    return;
+                }
+			}
+		}
+		jsonData[id] = attrValue;
+	}
+    $("#qrcode_btn").prop('disabled', true);
+	var params = jsonData;
+	jsonData.ip = getUrlParam("ip");
+	jsonData.r = getUrlParam("r");
+	jsonData.t = getUrlParam("t");
+	jsonData.vlanid = getUrlParam("vlanid");
+	jsonData.c = getUrlParam("c");
+	jsonData.controller_type = getUrlParam("controller_type");
+	jsonData._ID_ = getUrlParam("_ID_");
+
+	function error(msg) {
+		var formid = "mode_qrcode_info";
+		js_alert(formid, msg);
+	}
+	$.ajax({
+		url: url,
+		data: params,
+		type: "POST",
+		success: function(json) {
+    		$("#qrcode_btn").prop('disabled', false);
+			// var json = json_decode(resp);
+			if (json && json.success) {
+				successFn(json);
+			} else {
+				// successFn();
+				error((json && json.msg) || _("Login failed. Please contact the network administrator."));
+			}
+		},
+		error: function(o) {
+    		$("#qrcode_btn").prop('disabled', false);
+			// successFn();
+			error(_("Network connection error occurred."));
+		}
+	});
+
+	function successFn(json) {
+		changeQrcodeStep(1);
+		//TODO
+		//activatePage("loginSuccess");
+	}
+}
+//用户完善信息页面点击已经拥有账号的页面提交用户名
+function onSubmitCompleteUser() {
+	var username = $("#complete_user_username").val();
+	if (!username) {
+		js_alert("mode_complete_user", _("Please specify username first."));
+		return;
+	}
+	var params = {
+		opr: 'query',
+		policy: getUrlParam('policy', true),
+		policy_type: getUrlParam('policy_type'),
+		username: username
+	};
+	var btn = $id('completeUser_submitBtn'),
+		fn = function() {
+			if (btn) {
+				btn.value = btn.orgValue;
+				btn.disabled = false;
+			}
+		};
+	if (btn) {
+		btn.orgValue = btn.value;
+		btn.disabled = true;
+		btn.value = _('Please wait...');
+	}
+	$.ajax({
+		url: g_url,
+		data: params,
+		type: "POST",
+		success: function(json) {
+			json = json_decode(json);
+			if (json.success) {
+
+				dealInfoItem(json, 'completeInfo');
+				activatePage('completeUserInfo', username);
+			} else {
+				js_alert("mode_complete_user", json.msg || _("Network connection error occurred."));
+			}
+			fn();
+		},
+		error: function(o) {
+			fn();
+			// error(_("网络异常"));
+		}
+	})
+
+}
+//用户注册，确定按钮事件，提交注册信息
+function onRegestUser(type, idStr) {
+	// if (!regestAndCompleteValidator(type)) return;
+	var formInfo = g_infoback,
+	    isLocal = g_infoback.is_local,
+		jsonData = {},
+		groupListID = '#' + type + 'GroupList',
+		attrs = formInfo.attr_list,
+		hasBuildPhone = false, //是否有内置的手机号的标志
+		hasBuildEmail = false, //是否有内置的邮箱的标志
+		formid,
+        nameReg = /[,/]/,
+		remainAttrs = []; //用来保存除特殊属性之外的其他属性
+	if (formInfo.group_enable) {
+		jsonData.group = $(groupListID).val();
+	}
+	var domReg = /^[^`~!#$%^&*()+=\\|{};:"',/<>?]*$/;
+
+	if (type === 'regest') {
+		var rckey = +(new Date()) + '';
+		var pwd = do_encrypt_rc4($id("regest_password").value, rckey);
+
+		jsonData.username = $("#regest_username").val();
+		jsonData.password = pwd;
+		jsonData.auth_tag = rckey;
+		formid = "mode_regestUser";
+
+		if (!validateRegestPasswordStrength(formid)) {
+			return;
+		}
+	} else if (type === 'complete') {
+		jsonData.username = $("#complete_username").val();
+		formid = "mode_complete";
+	} else if (type === 'completeInfo') {
+		jsonData.username = $("#completeInfo_username_default").val();
+		formid = "mode_complete_userInfo";
+	}
+    if (nameReg.test(jsonData.username)) {
+        js_alert(formid, _('Username cannot contain any of the following characters: ,/'));
+        return;
+    }
+    if (jsonData.username.length > 95) {
+    	js_alert(formid, _('Username cannot exceed 95 characters.'));
+	return;
+    }
+	for (var i = 0; i < attrs.length; i++) {
+		//先将内置的手机号码和邮箱账号的提取出来
+		if (attrs[i].build_in && attrs[i].attr === 'phone') {
+			hasBuildPhone = true;
+		} else if (attrs[i].build_in && attrs[i].attr === 'mail') {
+			hasBuildEmail = true;
+		} else {
+			//剩下的属性
+			remainAttrs.push(attrs[i]);
+		}
+	}
+	//获取手机、验证码
+	if (hasBuildPhone) {
+		jsonData.phone = $('#' + type + '_phone_attr').val();
+		if (formInfo.bind_mobile) {
+			jsonData.smsCode = $('#' + type + '_sms_code').val();
+		}
+
+		var mobileReg = /^\d{1,20}$/;
+		if (!mobileReg.test(jsonData.phone)) {
+			js_alert(formid, _("Separator of mobile phone numbers is invalid."));
+			return;
+		}
+	}
+	//获取邮箱、验证码
+	if (hasBuildEmail) {
+		jsonData.mail = $('#' + type + '_mail_attr').val();
+		if (typeof($('#' + type + 'DomainList').val()) != 'undefined') {
+			jsonData.mail = jsonData.mail + $('#' + type + 'DomainList').val();
+			if (!domReg.test(jsonData.mail)) {
+		        js_alert(formid, _('It cannot contain any of the following characters: ^[^`~!#$%^&*()+=\\|{};:\"\',/<>?]*$'));
+		        return;
+		    }
+		    var mailReg = /^(\w-*\.*)+@(\w-?)+(\.\w{2,})+$/;
+		    if (!mailReg.test(jsonData.mail)) {
+		    	js_alert(formid, _('It is not a valid email address.'));
+		        return;
+		    }
+		    if (jsonData.mail.length > 63) {
+		    	js_alert(formid, _('It cannot exceed 63 characters.'));
+		    	return;
+		    }
+		}
+		if (formInfo.bind_email) {
+			jsonData.mailCode = $('#' + type + '_mail_code').val();
+		}
+	}
+
+
+	//对剩下属性组装数据
+	for (var j = 0; j < remainAttrs.length; j++) {
+		var remainAtt = remainAttrs[j].id;
+		jsonData[remainAtt] = $('#' + type + '_' + remainAtt + '_attr').val();
+		//提交之前进行校验
+		if (remainAttrs[j].required) {
+			if (jsonData[remainAtt] === '') {
+				js_alert(formid, _(remainAttrs[j].attr + " is required."));
+				return;
+			} else {
+				if (!domReg.test(jsonData[remainAtt])) {
+			        js_alert(formid, _(remainAttrs[j].attr + ' cannot contain any of the following special characters: ^[^`~!#$%^&*()+=\\|{};:\"\',/<>?]*$'));
+			        return;
+			    }
+			    if (jsonData[remainAtt].length > 95) {
+			    	js_alert(formid, _(remainAttrs[j].attr + ' cannot exceed 95 characters.'));
+				return;
+			    }
+			}
+		}
+	}
+
+	// 根据元素判断是否存在验证码
+	var $codeElement = $('#regest_captcha_code');
+	var CHECKCODE_COUNT = 4; //验证码长度
+	var noNeedCode = ['completeInfo'].indexOf(type) > -1
+	if (!noNeedCode && $codeElement[0]) {
+
+		// 验证码字段
+		jsonData.captcha_code = $codeElement.val();
+
+		// 验证码默认字段
+		jsonData.captcha_type = 'register';
+
+		if (!jsonData.captcha_code) {
+			js_alert(formid, 'Please enter the characters in the image.');
+			return;
+		} else {
+
+			//验证码的长度，必须为4位
+			if(jsonData.captcha_code.length !== CHECKCODE_COUNT) {
+				js_alert(formid, 'Please enter 4 characters.');
+				return;
+			}
+
+			//验证码不能包含特殊字符
+			if (!domReg.test(jsonData.captcha_code)) {
+				js_alert(formid, "Code cannot contain any of the following special characters: `~!#$%^&*()+=\|{}[];:\"\',\/<>?\r\n");
+				return;
+			}
+
+		}
+	}
+	
+	//发送注册信息或完善信息请求
+	regestAndCompleteRequest(type, jsonData, isLocal, idStr);
+}
+//注册和完善信息页面请求
+function regestAndCompleteRequest(type, jsonData, isLocal, idStr) {
+	var params = jsonData,
+		formid;
+	params.opr = 'register';
+	if (isLocal) {
+		params.opr = "perfect";
+	}
+	formid = setRegestType(type);
+
+	var btn = $id(idStr),
+		fn = function() {
+			if (btn) {
+				btn.value = btn.orgValue;
+				btn.disabled = false;
+			}
+		};
+	if (btn) {
+		btn.orgValue = btn.value;
+		btn.disabled = true;
+		btn.value = _('Please wait...');
+	}
+	$.ajax({
+		url: g_regUrl,
+		// data: JSON.stringify(params),
+		data: params,
+		// datatype: 'jsonp',
+		type: "POST",
+		// contentType: false,
+		//       processData: false,
+		success: function(json) {
+			// json = json_decode(json);
+			if (json.success) {
+
+				if (type === "regest") {
+					if (json.freeaudit) {
+						activatePage("regAndComSuccess");
+					} else {
+						activatePage("regAndComAudit");
+                        var dot1x = getUrlParam('dot1x');
+                        if(dot1x === '1' || dot1x === '0'){
+                            $('.reg-and-com-audit .login_head span').html('Your information is submitted. Please wait for the administrator to approve your request. An account that has not passed the audit is invalid and cannot be authenticated successfully.');
+                        }
+
+					}
+				} else {
+					var locationUrl = json.location;
+					if (locationUrl !== '') {
+						// var jump_url = getUrlParam('url');
+						locationUrl = decodeURIComponent(locationUrl);
+						location.href = locationUrl;
+					} else {
+						if (type === 'complete') {
+							js_alert("mode_complete", json.msg || _("Sign up failed."));
+						} else{
+							js_alert("mode_complete_userInfo", json.msg || _('Failed to find this.'));
+						}
+					}
+				}
+			} else {
+				if (type === "regest" || type === 'complete') {
+					updateCheckcodeImg();
+				}
+				js_alert(formid, json.msg || _("Network connection error occurred."));
+			}
+			fn();
+		},
+		error: function(o) {
+			fn();
+			// error(_("网络异常"));
+		}
+	});
+}
+//获取验证码，点击获取验证码按钮事件
+function onGetSmsCode(type) {
+    var checked;
+	if (!getSmsCodeValidtor(type)) return;
+	if(type === 'sms'){
+		//短信认证
+        checked = $id("sms_disclaimer")? $id("sms_disclaimer").checked : true;
+	}else {
+		//短信快捷认证
+        checked = $id("sms_fast_disclaimer") ? $id("sms_fast_disclaimer").checked : true;
+	}
+	if (window.g_hasDisclaimer && !checked) {
+		setSmsTips(type, _("Please read and accept the Terms of Use."));
+		return false;
+	}
+	var params = {
+		opr: 'getSmsCode',
+		userName: type === "fastmobile" ? $id("mobilefast_name").value : $id("sms_name").value
+	};
+	if (type === 'fastmobile') {
+		cookie.set("fastPhoneNumber", $id("mobilefast_name").value, g_remberTime);
+		params.quickLogin = 1;
+		getSmsCodeRequest(params, "mode_mobile", $id("mobilefast_getCodeBtn"));
+	} else {
+		cookie.set("phoneNumber", $id("sms_name").value, g_remberTime);
+		params.quickLogin = 0;
+		getSmsCodeRequest(params, "mode_sms", $id("sms_getCodeBtn"));
+	}
+}
+
+//注册页面获取手机验证码和邮箱验证码
+//type为regest代表注册页面;type为complete为完善信息页面
+//attr: mobile，获取手机验证码;attr:email，获取邮箱验证码
+function onGetRegestCode(type, attr) {
+	var regestPhone,
+		regestMail,
+		codeBtnID,
+		formid;
+	if (type === 'regest') {
+		formid = "mode_regestUser";
+		regestPhone = $id("regest_phone_attr") && $id("regest_phone_attr").value;
+		regestMail = $id("regest_mail_attr") && $id("regest_mail_attr").value;
+		if ($id("regest_phone_attr")) {
+			cookie.set("regPhoneNumber", $id("regest_phone_attr").value, g_remberTime);
+		}
+		if ($id("regest_mail_attr")) {
+			cookie.set("regMail", $id("regest_mail_attr").value, g_remberTime);
+		}
+	} else if (type === 'complete') {
+		formid = "mode_complete";
+		regestPhone = $id("complete_phone_attr") && $id("complete_phone_attr").value;
+		regestMail = $id("complete_mail_attr") && $id("complete_mail_attr").value;
+		if ($id("complete_phone_attr")) {
+			cookie.set("comPhoneNumber", $id("complete_phone_attr").value, g_remberTime);
+		}
+		if ($id("complete_mail_attr")) {
+			cookie.set("comMail", $id("complete_mail_attr").value, g_remberTime);
+		}
+	} else if (type === 'completeInfo') {
+		formid = "mode_complete_userInfo";
+		regestPhone = $id("completeInfo_phone_attr") && $id("completeInfo_phone_attr").value;
+		regestMail = $id("completeInfo_mail_attr") && $id("completeInfo_mail_attr").value;
+		if ($id("completeInfo_phone_attr")) {
+			cookie.set("comInfoPhoneNumber", $id("complete_phone_attr").value, g_remberTime);
+		}
+		if ($id("completeInfo_mail_attr")) {
+			cookie.set("comInfoMail", $id("complete_mail_attr").value, g_remberTime);
+		}
+	}
+
+	if (typeof($('#' + type + 'DomainList').val()) != 'undefined') {
+		regestMail = regestMail + $('#' + type + 'DomainList').val();
+	}
+
+	var params = {};
+	if (attr === 'phone') {
+		params.opr = 'getSmsCode';
+		params.phone = regestPhone;
+		codeBtnID = type + '_phone_attr_getSmsCodeBtn';
+		if (regestPhone === "") {
+			js_alert(formid, _("Mobile phone number is required."));
+			return;
+		}
+	} else {
+		params.opr = 'getMailCode';
+		params.mail = regestMail;
+		codeBtnID = type + '_mail_attr_getEmailCodeBtn';
+		if (regestMail === "") {
+			js_alert(formid, _("Email address is required."));
+			return;
+		}
+	}
+
+	//不改变原短信登录验证码的获取机制，新的注册页面、终端注册页面以及终端注册完善信息页面验证码的获取统一使用这个
+	function getCodeSuccessFn(json) {
+		if (type === 'regest') {
+			afterGetAllCodeState(json, params, 'mode_regestUser', $id(codeBtnID), 60, type, attr);
+		} else if (type === 'complete') {
+			afterGetAllCodeState(json, params, 'mode_complete', $id(codeBtnID), 60, type, attr);
+		} else if (type === 'completeInfo') {
+			afterGetAllCodeState(json, params, 'mode_complete_userInfo', $id(codeBtnID), 60, type, attr);
+		}
+	}
+	$.ajax({
+		url: g_regUrl,
+		data: params,
+		type: "POST",
+		success: function(resp) {
+			var json = json_decode(resp);
+			if (json) {
+				getCodeSuccessFn(json);
+			} else {
+				error(json.msg || _("Login failed. Please contact the network administrator."));
+			}
+		},
+		error: function(o) {
+			// getCodeSuccessFn(o);
+			error(_("Network connection error occurred."));
+		}
+	})
+}
+//短信登录，点击短信登录按钮事件
+function onSmsLogin(type) {
+	if (!smsValidtor(type)) return;
+	var params = {
+		opr: 'smsLogin',
+		userName: $id("sms_name").value,
+		pwd: $id("sms_pwd").value,
+		rememberPwd: $id("rememberSms").checked ? '1' : '0',
+		quickLogin: 0
+
+	};
+	if (type === "fastmobile") {
+		var mSms = $id("rememberMobileSms"),
+			mName = $id("mobilefast_name"),
+			mPas = $id("mobilefast_pwd");
+		params = {
+			opr: 'smsLogin',
+			userName: mName && mName.value,
+			pwd: mPas && mPas.value,
+			rememberPwd: (mSms && mSms.checked) ? '1' : '0',
+			quickLogin: 1
+		}
+		if (g_WXscanOpenID) {
+			params.openid = g_WXscanOpenID;
+		}
+	}
+	if (type === "fastmobile") {
+		loginRequest(params, "mode_mobile", $id("freeauth_submitBtn"));
+	} else {
+		loginRequest(params, "mode_sms", $id("sms_submitBtn"));
+	}
+}
+
+//获取url参数(即url中的?url_param=content)
+function getParamFromUrl(name) {
+	var reg = new RegExp("(^|&)" + name + "=([^&]*)(&|$)", "i"),
+		r = window.location.search.substr(1).match(reg);
+	return r != null ? decodeURIComponent(r[2].replace(/\+/g, " ")) : null;
+}
+
+// 在登录后跳转前加入判断是否要跳到证书检测页面
+function httpscert_jump(url) {
+	var vlanid = getParamFromUrl("vlanid");
+
+	$.ajax({
+		type: "POST",
+		url: "/httpscert/handler_checkjump",
+		timeout: 3000,
+		data: {
+			vlanid: vlanid
+		},
+		success: function(response) {
+			if (response == "1") {
+				var href = "/httpscert/httpscert.html?vlanid=" + vlanid + "&url=" + encodeURIComponent(url);
+                openHref(href);
+			} else {
+				openHref(url);
+				//location.replace(url);
+                /*setTimeout(function() {
+					location.reload();
+				}, 600);*/
+			}
+		},
+		error: function(XMLHttpRequest, textStatus, errorThrown) {
+			location.href = url;
+		}
+	});
+}
+//跳转到注销页面（含证书检测判断）
+function httpscert_jump_logout(username, pop) {
+	var vlanid = getParamFromUrl("vlanid");
+
+	var url = window.location.href;
+
+	// 去掉url参数中的pop、type、username参数
+	var pattern_arr = ["&pop=", "?pop=", "&type=", "?type=", "&username=", "?username="];
+	for (var i = 0; i < pattern_arr.length; i++) {
+		var pattern = pattern_arr[i];
+		var pos1 = url.indexOf(pattern);
+		if (pos1 != -1) {
+			var pos2 = url.indexOf("&", pos1 + pattern.length);
+			if (pos2 != -1) {
+				url = url.substr(0, pos1) + url.substr(pos2);
+			} else {
+				url = url.substr(0, pos1);
+			}
+		}
+	}
+	// 加入pop、type、username参数
+	pop = pop ? "1" : "0";
+	if (url.indexOf('?') != -1) {
+		url = url + "&pop=" + pop + "&type=logout&username=" + encodeURIComponent(username);
+	} else {
+		url = url + "?pop=" + pop + "&type=logout&username=" + encodeURIComponent(username);
+	}
+
+	// 先停止心跳机制
+	g_queryEffect = false;
+
+	$.ajax({
+		type: "POST",
+		url: "/httpscert/handler_checkjump",
+		timeout: 3000,
+		data: {
+			vlanid: vlanid
+		},
+		success: function(response) {
+			if (response == "1") {
+				location.href = "/httpscert/httpscert.html?vlanid=" + vlanid + "&url=" + encodeURIComponent(url);
+			} else {
+				// activatePage('logout', username);
+				location.href = url; // 为触发ios的网络监测,使wifi的"取消"变为"完成"
+				setTimeout(function() {
+					location.reload();
+				}, 200);
+				g_queryEffect = true; //恢复心跳机制
+			}
+		},
+		error: function(XMLHttpRequest, textStatus, errorThrown) {
+			activatePage('logout', username);
+			g_queryEffect = true; //恢复心跳机制
+		}
+	});
+}
+
+function getloginSuccessJumpURL (url, userName) {
+	if (typeof url !== 'string') {
+		url = '';
+	}
+	if (!userName) {
+		userName = getUrlParam('username');
+	}
+	var url_path = url;
+	var index = url_path.indexOf('?');
+	if (index > 0) {
+		url_path = url_path.substring(0, index);
+	}
+	var reg = RegExp(
+		"^http://www\.airport\.us/" +
+		"\|^http://www\.thinkdifferent\.us/" +
+		"\|^http://captive\.apple\.com/" +
+		"\|^http://www\.appleiphonecell\.com/" +
+		"\|^http://www\.ibook\.info/" +
+		"\|^http://www\.itools\.info/" +
+		"\|^http://www\.gstatic\.com/generate_204" +
+		"\|^http://clients[0-9]\.google\.com/generate_204",
+		"i");
+	if (!url || reg.test(url) || url_path.indexOf('generate_204') !== -1) {
+		url = window.location.href;
+		if (url.indexOf("&type=logout&username=") < 0) {
+			url = url + "&type=logout&username=" + encodeURIComponent(userName);
+		}
+	}
+
+
+    if(url.indexOf('type=logout') > -1) {
+        url = url +'&'+ location.search.slice(1);
+    }
+
+
+	return url;
+}
+
+//免责声明的登录
+function onDisclaimerLogin() {
+	//成功后干啥
+	function fn(o) {
+		btn.disabled = false;
+		var formid = "mode_disclaimer";
+		btn.value = btn.orgValue;
+		if (!o.success) {
+			js_alert(formid, o.msg);
+			return;
+		}
+
+		var action = o.action,
+			interval;
+		switch (action) {
+			case "location":
+				btn.disabled = true;
+
+				httpscert_jump(getloginSuccessJumpURL(o.location, o.userName));
+				break;
+		}
+		//登录成功后启用或关闭心跳状态
+		enablePop(o.pop);
+	}
+
+	var checked = $id("dis_disclaimer") ? $id("dis_disclaimer").checked : false,
+		btn = $id("dis_submitBtn");
+	if (window.g_hasDisclaimer && !checked) {
+		js_alert("mode_disclaimer", _((_("Please read and accept the Terms of Use."))));
+		return false;
+	}
+	btn.orgValue = btn.value;
+	btn.value = _("Please wait...");
+	btn.disabled = true;
+	$ajax({
+		opr: 'noAuthlogin'
+	}, "mode_disclaimer", fn, btn);
+}
+
+//免认证登录
+function onFreeauthLogin() {
+	//成功后干啥
+	function fn(o) {
+		btn.disabled = false;
+		var formid = "mode_freeauth";
+		btn.value = btn.orgValue;
+		if (!o.success) {
+			js_alert(formid, o.msg);
+			return;
+		}
+
+		var action = o.action,
+			interval;
+		switch (action) {
+			case "location":
+				btn.disabled = true;
+
+				httpscert_jump(getloginSuccessJumpURL(o.location, o.userName));
+				break;
+			case "logout":
+				httpscert_jump_logout(o.userName, o.pop);
+				break;
+		}
+		//登录成功后启用或关闭心跳状态
+		enablePop(o.pop);
+	}
+
+	var checked = $id("freeauth_disclaimer") ? $id("freeauth_disclaimer").checked : true,
+		btn = $id("freeauth_submitBtn");
+	if (window.g_hasDisclaimer && !checked) {
+		js_alert("mode_freeauth", _((_("Please read and accept the Terms of Use."))));
+		return false;
+	}
+	btn.orgValue = btn.value;
+	btn.value = _("Please wait...");
+	btn.disabled = true;
+	$ajax({
+		opr: 'freeauth'
+	}, "mode_freeauth", fn, btn);
+}
+
+function onLogout() {
+	logoutRequest({
+		opr: 'logout'
+	}, 'mode_logout', $id('logout_submitBtn'))
+}
+
+
+
+//通用ajax请求，会转成json参数给到successFn
+function $ajax(params, formid, successFn, btn, failFn, async) {
+	function error(msg) {
+		if (btn) {
+			btn.disabled = false;
+			btn.value = btn.orgValue;
+		}
+		js_alert(formid, msg);
+	}
+	currentAjax = $.ajax({
+		url: g_url,
+		data: params,
+		type: "POST",
+		async: async === false ? false : true,
+		success: function(resp) {
+			var json = json_decode(resp);
+			if (json) {
+					// 二次认证请求后判断是否会返回首次认证
+			if(json.backFirstAuth) {
+				js_alert(formid, json.msg);
+				delayExecutionFn('backFirst');
+			}
+				successFn(json);
+			} else {
+				if (typeof failFn === 'function') {
+					failFn(json);
+				}
+				error(_("Login failed. Please contact the network administrator."));
+			}
+		},
+		error: function(o) {
+			if (typeof failFn === 'function') {
+				failFn(o);
+			}
+			error(_("Network connection error occurred."));
+			if(o && o.backFirstAuth) {
+				delayExecutionFn('backFirst');
+				return;
+			}
+		}
+	})
+}
+
+//通用登录请求
+function loginRequest(params, formid, btn) {
+	if (!btn) {
+		return;
+	}
+	var $btn = $(btn);
+
+	//成功后干啥
+	function fn(o, isThird) {
+		btn.disabled = false;
+		btn.value = btn.orgValue;
+		$btn && $btn.removeClass('disabled');
+		if (!o.success) {
+			if (o.keyExpired) {
+				js_alert(AuthTypeMap['twoAuthOtp'].authId, _("Code has expired. "), true, '<span class="sim-link" onclick="getCode(true)">' + _('Get Code Again') + '</span>');
+
+				// 为了防止xss攻击，提示的文案被格式化，这里重新更新提示的title
+				$("#two-auth-mode_dynamicCode .login_box_msg").find("dd").attr('title', _('Code has expired. Please get code again.'));
+				return;
+			}
+
+			if (formid === "mode_password_wx")
+			{
+				activateTab('pwd');
+				formid = "mode_password";
+			}
+			
+			js_alert(formid, o.msg);
+			return;
+		}
+
+		//发送第三方的条件
+		if (o.forms && isThird !== false) {
+			sendThird(o, fn);
+			return;
+		}
+
+		// 是否需要二次认证，跳转到二次认证登录页面
+		if (o.needSecondAuth) {
+			var url = window.location.href;
+			// 预览页面切换二次认证时，需要同时切换右上角下拉框
+			getUrlParam("ispreview") && previewChangeSelect('showsecond');
+			gotwoFactorAuth(url, 'twoAuthOpt');
+			activateTab('twoAuthOpt');
+			return;
+		}
+
+		//做下特殊处理，登录成功后应该恢复注册页面、完善信息页面、短信快捷登录页面、会议室二维码获取信息项页面获取验证码的按钮
+		//TODO随后代码优化
+		var getCodeBtn = $id("sms_getCodeBtn"),
+			regPhoneSmsCodeBtn = $id("regest_phone_attr_getSmsCodeBtn"),
+			regMailCodeBtn = $id("regest_mail_attr_getSmsCodeBtn"),
+			comPhoneSmsCodeBtn = $id("complete_phone_attr_getSmsCodeBtn"),
+			comMailCodeBtn = $id("complete_mail_attr_getSmsCodeBtn"),
+			fastmobilePhoneSmsCodeBtn = $id("mobilefast_getCodeBtn"),
+			mtqrcodePhoneSmsCodeBtn = $id("mtqrcode_phone_attr_getSmsCodeBtn"),
+			comInfoPhoneSmsCodeBtn = $id("completeInfo_phone_attr_getSmsCodeBtn"),
+			comInfoMailCodeBtn = $id("completeInfo_mail_attr_getEmailCodeBtn"),
+			forgetpwdPhoneSmsCodeBtn = $id("forget_getSmsCode");
+
+		cookie.set("remainTime", "");
+		cookie.set("regMobileRemainTime", "");
+		cookie.set("regEmailRemainTime", "");
+		cookie.set("comMobileRemainTime", "");
+		cookie.set("comEmailRemainTime", "");
+		cookie.set("fastRemainTime", "");
+		cookie.set("mtqrcodePhoneRemainTime", "");
+		cookie.set("comInfoPhoneRemainTime", "");
+		cookie.set("comInfoMailRemainTime", "");
+		cookie.set("forgetPwdPhoneNumber", "");
+
+		var codeBtnAttr = [
+			getCodeBtn,
+			regPhoneSmsCodeBtn,
+			regMailCodeBtn,
+			comPhoneSmsCodeBtn,
+			comMailCodeBtn,
+			fastmobilePhoneSmsCodeBtn,
+			mtqrcodePhoneSmsCodeBtn,
+			comInfoPhoneSmsCodeBtn,
+			comInfoMailCodeBtn,
+			forgetpwdPhoneSmsCodeBtn
+		];
+		var tmpBtn, len = codeBtnAttr.length;
+		for (var i = 0; i < len; i++) {
+			tmpBtn = codeBtnAttr[i];
+			if (tmpBtn) {
+				clearInterval(tmpBtn.interval);
+				tmpBtn.value = _("Send Again");
+                tmpBtn.tagName.toLowerCase() !== 'input' && $(tmpBtn).html(_("Send Again"));
+
+				$(tmpBtn) && $(tmpBtn).removeClass('disabled');
+				tmpBtn.disabled = false;
+			}
+		}
+		
+		var action = o.action,
+			interval,
+			isPreview = (window.top.location.search.indexOf('is_preview') !== -1);
+
+		// 双因素认证迭代一：预览页面不支持跳转，直接跳转到注销页面
+		if (isPreview && action === 'location') {
+			action = 'logout';
+		}
+		switch (action) {
+			case "changePwd":
+				activatePage('changePwd', o.userName);
+				break;
+			case "location":
+				btn.disabled = true;
+
+				httpscert_jump(getloginSuccessJumpURL(o.location, o.userName));
+				break;
+			case "logout":
+				httpscert_jump_logout(o.userName, o.pop);
+				break;
+		}
+		//登录成功后启用或关闭心跳状态
+		enablePop(o.pop);
+	}
+
+	btn.orgValue = btn.value;
+	btn.disabled = true;
+	if (btn.className && btn.className.indexOf('.get-pass-code') === -1) {
+		btn.value = _("Please wait...");
+	}
+	$btn.addClass('disabled');
+
+	$ajax(params, formid, function(o) {
+		setTimeout(function() {
+			fn(o);
+		}, 1000);
+	}, btn, function() {
+		btn.disabled = false;
+		btn.value = btn.orgValue;
+		$btn && $btn.removeClass('disabled');
+	});
+}
+
+//发给第三方请求(eg:思科)
+function sendThird(o, successFn) {
+	var me = this,
+		json = o.forms;
+
+	$.ajax({
+		type: "POST",
+		contentType: "application/json",
+		dataType: "jsonp",
+		crossDomain: true,
+		jsonp: "callbackparam", //服务端用于接收callback调用的function名的参数
+		url: json.action,
+		data: {
+			err_flag: json.err_flag,
+			buttonClicked: json.buttonClicked,
+			redirect_url: json.redirect_url,
+			username: json.username,
+			password: json.password
+		},
+		complete: function(resp) {
+			if (resp.statusText == 'success') {
+				successFn(o, false);
+			}
+		}
+	});
+	return;
+}
+
+//获取短信认证码后的状态
+function afterGetSmsCodeSate(o, params, formid, btn, cdtime) {
+	if (!btn) {
+		return;
+	}
+	if (!o.success) {
+		
+		// 获取短信验证码后，若认证策略已过期，测延时3s后关闭弹窗
+		o.backSecretVerification && delayExecutionFn('closeModel');
+		$(btn).removeClass('disabled');
+		var jump = '';
+		if (o.url) {
+			jump = '&nbsp;<a href="' + htmlEncode(o.url) + '" target="_blank">' + _('Go Now') + '</a>';
+		}
+		js_alert(formid, o.msg, false, jump);
+		btn.value = _("Send Again");
+        btn.tagName.toLowerCase() !== 'input' && $(btn).html(_("Send Again"));
+
+		btn.disabled = false;
+		return;
+	}
+	js_alert(formid, _("One-time passcode(OTP) was sent"));
+	//cookie.set("phoneNumber",params.userName);
+	clearInterval(btn.interval);
+	smsSetCookie(formid, cdtime);
+
+	var i = cdtime; //60s后重新获取
+	var txt = '';
+	btn.interval = setInterval(function() {
+		if (i > 0) {
+			i--;
+			txt = _("Send Again") + "(" + i + ")";
+			btn.value = txt;
+            btn.tagName.toLowerCase() !== 'input' && $(btn).html(txt);
+
+			btn.disabled = true;
+			$(btn).addClass('disabled');
+			smsSetCookie(formid, cdtime);
+		} else {
+			clearInterval(btn.interval);
+			if (formid === 'mode_sms') {
+				cookie.set("remainTime", "");
+			} else if (formid === 'mode_verifyIdentidy') {
+				cookie.set("optSmsCodeRemainTime", "");
+			} else {
+				cookie.set("fastRemainTime", "");
+			}
+			btn.value = _("Send Again");
+            btn.tagName.toLowerCase() !== 'input' && $(btn).html(_("Send Again"));
+
+			btn.disabled = false;
+			$(btn).removeClass('disabled');
+		}
+	}, 1 * 1000);
+}
+
+// 设置短信的登录，短信快捷登录，获取密钥发送验证码的倒计时cookie
+function smsSetCookie (type, time) {
+	switch (type) {
+		case 'mode_sms':
+			cookie.set("remainTimespan", (new Date()).getTime());
+			cookie.set("remainTime", time);
+			break;
+		case 'mode_verifyIdentidy':
+			cookie.set("optSmsCodeRemainTimespan", (new Date()).getTime());
+			cookie.set("optSmsCodeRemainTime", time);
+			break;
+		default:
+			cookie.set("fastRemainTimespan", (new Date()).getTime());
+			cookie.set("fastRemainTime", time);
+			break;
+	}
+}
+
+
+function setAllCodeCookie(type, attr, timeValue) {
+	if (type === 'regest') {
+		cookie.set(TYPE_TIME['reg' + attr].time, timeValue);
+		cookie.set(TYPE_TIME['reg' + attr].timespan, (new Date()).getTime());
+	} else if (type === "complete") {
+		cookie.set(TYPE_TIME['com' + attr].time, timeValue);
+		cookie.set(TYPE_TIME['com' + attr].timespan, (new Date()).getTime());
+	} else if (type === 'comInfo') {
+		cookie.set(TYPE_TIME['comInfo'].time, timeValue);
+		cookie.set(TYPE_TIME['comInfo'].timespan, (new Date()).getTime());
+	} else if (type === 'forgetpwd') {
+		cookie.set(TYPE_TIME['forgetpwd'].time, timeValue);
+		cookie.set(TYPE_TIME['forgetpwd'].timespan, (new Date()).getTime());
+	}
+}
+//注册页面获取短信验证码和邮箱验证码之后的状态处理
+function afterGetAllCodeState(o, params, formid, btn, cdtime, type, attr) {
+	if (!btn) {
+		return;
+	}
+	if (!o.success) {
+		btn.disabled = false;
+		$(btn).removeClass('disabled');
+		js_alert(formid, o.msg);
+        btn.tagName.toLowerCase() !== 'input' && $(btn).html(_("Send Again"));
+
+		btn.value = _("Send Again");
+		return;
+	}
+	js_alert(formid, _("One-time passcode (OTP) was sent."));
+	if (btn) {
+		clearInterval(btn.interval);
+	}
+	setAllCodeCookie(type, attr, cdtime);
+
+	var i = cdtime,
+		txt = ''; //60s后重新获取
+	btn.interval = setInterval(function() {
+		if (i > 0) {
+			i--;
+			txt = _("Send Again ") + "(" + i + ")";
+			btn.value = txt;
+            btn.tagName.toLowerCase() !== 'input' && $(btn).html(txt);
+
+			btn.disabled = true;
+			cookie.set();
+			if (type === 'regest') {
+				cookie.set(TYPE_TIME['reg' + attr].timespan, (new Date()).getTime());
+				cookie.set(TYPE_TIME['reg' + attr].time, i);
+			} else if (type === 'complete') {
+				cookie.set(TYPE_TIME['com' + attr].timespan, (new Date()).getTime());
+				cookie.set(TYPE_TIME['com' + attr].time, i);
+			} else if (type === 'mtqrcode') {
+				cookie.set(TYPE_TIME['mtqrcodeinfo'].timespan, (new Date()).getTime());
+				cookie.set(TYPE_TIME['mtqrcodeinfo'].time, i);
+			} else if (type === 'completeInfo') {
+				cookie.set(TYPE_TIME['comInfo'].timespan, (new Date()).getTime());
+				cookie.set(TYPE_TIME['comInfo'].time, i);
+			} else if (type === 'forgetpwd') {
+				cookie.set(TYPE_TIME['forgetpwd'].timespan, (new Date()).getTime());
+				cookie.set(TYPE_TIME['forgetpwd'].time, i);
+			}
+		} else {
+			clearInterval(btn.interval);
+			if (type === 'regest') {
+				cookie.set(TYPE_TIME['reg' + attr].time, "");
+			} else if (type === 'complete') {
+				cookie.set(TYPE_TIME['com' + attr].time, "");
+			} else if (type === 'mtqrcode') {
+				cookie.set(TYPE_TIME['mtqrcodeinfo'].time, "");
+			} else if (type === 'completeInfo') {
+				cookie.set(TYPE_TIME['comInfo' + attr].time, "");
+			} else if (type === 'forgetpwd') {
+				cookie.set(TYPE_TIME['forgetpwd'].timespan, (new Date()).getTime());
+			}
+			btn.value = _("Send Again");
+
+            btn.tagName.toLowerCase() !== 'input' && $(btn).html(_("Send Again"));
+			btn.disabled = false;
+			$(btn).removeClass('disabled');
+		}
+	}, 1 * 1000);
+}
+
+//获取短信验证码的请求
+function getSmsCodeRequest(params, formid, btn, failFn) {
+	//成功后干啥
+	function fn(o) {
+		afterGetSmsCodeSate(o, params, formid, btn, 60);
+	}
+
+	btn.orgValue = btn.value;
+	btn.disabled = true;
+	$(btn).addClass('disabled');
+	$ajax(params, formid, fn, btn, failFn);
+}
+
+//修改密码的请求
+function changePwdRequest(params, formid, btn) {
+	//成功后干啥
+	function fn(o) {
+        var dot1x = getUrlParam('dot1x');
+        if((dot1x === '1' || dot1x === '0') && getUrlParam('type') === 'changePwd'){
+            activatePage("regAndComAudit");
+            $('.reg-and-com-audit .login_head span').html('The password has been changed successfully.');
+            return;
+        }
+		btn.value = btn.orgValue;
+		if (!o.success) {
+			js_alert(formid, o.msg);
+			btn.disabled = false;
+			return;
+		}
+		var i = 3;
+		js_alert(formid, _("Password has been changed.") + _("It enters Login page "+ "<b>" + (i) + "</b>" +" seconds later."), true);
+		var interval = setInterval(function() {
+			if (i > 0) {
+				js_alert(formid, _("Password has been changed.") + _("It enters Login page "+ "<b>" + (i--) + "</b>" +" seconds later."), true);
+			} else {
+				clearInterval(interval);
+				btn.disabled = false;
+				js_alert(formid, "");
+				activatePage('login', 'fromChangePwd');
+			}
+		}, 1 * 1000);
+	}
+
+	btn.orgValue = btn.value;
+	btn.value = _("Please wait...");
+	btn.disabled = true;
+	$ajax(params, formid, fn, btn);
+}
+
+//注销请求
+function logoutRequest(params, formid, btn) {
+	//成功后干啥
+	function fn(o) {
+		btn.value = btn.orgValue;
+		if (!o.success) {
+			js_alert(formid, o.msg);
+			btn.disabled = false;
+			return;
+		}
+		var i = 3;
+		js_alert(formid, _("Logout succeeded.")  + _("It enters the captive portal <b>" + (i) + "</b> second(s) later."), true);
+		var interval = setInterval(function() {
+			if (i > 0) {
+				js_alert(formid, _("Logout succeeded.") + _("It enters the captive portal <b>" + (i--) + "</b> second(s) later."), true);
+			} else {
+				clearInterval(interval);
+				btn.disabled = false;
+				js_alert(formid, "");
+				activatePage('login');
+			}
+		}, 1 * 1000);
+		enablePop(false);
+	}
+
+	btn.orgValue = btn.value;
+	btn.value = _("Please wait...");
+	btn.disabled = true;
+	$ajax(params, formid, fn, btn);
+}
+//<<---------------按钮事件和请求的绑定-------------
+
+
+//logout页面当pop=1的时候需要发心跳，同时在离开页面时需要提示
+var enablePop = (function() {
+	var pop = false,
+		interval;
+	var plat = String(navigator.platform.toLowerCase());
+	var isWin = plat.indexOf("win") == 0;
+	var mobile = false;
+
+	function stratQuery() {
+		clearInterval(interval);
+		interval = setInterval(request, g_querytTime * 1000);
+	}
+	if (!isWin)
+		mobile = true;
+	//心跳请求
+	function request() {
+		var getTimestamp = new Date().getTime();
+        var ip = getUrlParam("ip");
+        var encryMsg = encryptByTripleDES("timestamp=" + getTimestamp + "&ip=" + ip);
+		if (g_queryEffect) {
+			$.ajax({
+				url: g_querylogutUrl + "?data=" + encryMsg,
+				type: "GET",
+				success: function(resp) {
+					if (window.console && window.console.log) {
+						console.log("tick");
+					}
+				}
+			});
+		}
+	}
+	window.onbeforeunload = function(e) {
+		if (g_queryEffect) {
+			e = e || window.event;
+			if (pop && !mobile) {
+				var msg = _("Tips: You will log out if you navigate away from this page.");
+				e.returnValue = msg;
+				return msg;
+			}
+		}
+	};
+
+	return function(enable) {
+		pop = enable;
+		if (pop && !mobile) {
+			request();
+			stratQuery();
+		} else {
+			clearInterval(interval);
+		}
+	}
+})();
+
+//实现html中英文替换
+function doLocalHtml() {
+	$('*').each(function() {
+		if ($(this).attr("_html")) {
+			$(this).html(_($(this).attr("_html")));
+		}
+		if ($(this).attr("_value")) {
+			$(this).attr("value", _($(this).attr("_value")));
+		}
+		if ($(this).attr("_title")) {
+			$(this).attr("title", _($(this).attr("_title")));
+		}
+	});
+}
+//实现js中英文替换
+function _(str) {
+	//如果是中文则不处理。
+	if (parseInt(getUrlParam("lang")) !== 1) {
+		return str;
+	}
+	var argus = Array.prototype.slice.call(arguments, 1);
+	str = g_Language.hasOwnProperty(str) ? g_Language[str] : str;
+	return str.replace(/\{(\d+)\}/g, function(m, i) {
+		i = parseInt(i, 10);
+		if (i >= 0 && i < argus.length) {
+			return argus[i];
+		} else {
+			return m;
+		}
+	});
+}
+
+//定时请求后台,二维码认证
+function ajaxQCode() {
+	var urlip = getUrlParam('urlip');
+	var url = !urlip ? '/ac_portal/qcode_test.html?' + new Date().getTime() :
+		'/ac_portal/qcode_test.html?' + new Date().getTime() + "&urlip=" + urlip;
+	$.ajax({
+		type: 'GET',
+		url: url,
+		success: function(json) {
+			if (json == 1) {
+				js_alert("mode_qrcode", _("Authentication succeeded."));
+				clearInterval(window.g_setInter);
+				setTimeout(function() {
+					var jump_url = getUrlParam('url');
+					if (jump_url == '') {
+						jump_url = '/homepage/index.html?_FLAG=1';
+					}
+					httpscert_jump(getloginSuccessJumpURL(jump_url));
+				}, 500);
+			}
+		},
+		error: function(json) {
+			//js_alert("mode_qrcode", _("认证失败"));
+		}
+	});
+}
+//定时请求后台,二维码认证
+function ajaxWechat() {
+	var urlip = getUrlParam('urlip');
+	var url = !urlip ? '/ac_portal/wechat_test.html?' + new Date().getTime() :
+		'/ac_portal/wechat_test.html?' + new Date().getTime() + "&urlip=" + urlip;
+	$.ajax({
+		type: 'GET',
+		url: url,
+		success: function(json) {
+			json = json_decode(json);
+			//json格式有误，直接return		
+			if (!json || !json.success || json.success === 'false' || !json.username || json.username === '') {
+				return;
+			}
+			clearInterval(window.g_setWechatInter);
+			url = getUrlParam('url');
+			//有url就直接跳转
+			if (url !== '') {
+				window.location.href = decodeURIComponent(url);
+				return;
+			}
+			//没有url，有username直接跳到注销页面
+			username = decodeURIComponent(json.username);
+			httpscert_jump_logout(username, 0);
+		},
+		error: function(json) {}
+	});
+}
+//定时请求后台,微信扫码认证
+function ajaxWXscan() {
+	var ip = getUrlParam("ip");
+	var url = '/staff_auth/query.html';
+	$.ajax({
+		type: 'GET',
+        url: url + "?ip=" + ip + '&d='+ new Date(),
+		success: function(json) {
+			// json = json_decode(json);
+			var status = +json.status;
+			var openid,
+				username,
+				pwd,
+				key;
+			if (nowTab === 'WXscan') {
+				if (status === 2) {
+					js_alert("mode_WXscan", "");
+					openid = json.openid;
+					username = json.username;
+					g_WXscanOpenID = openid;
+					pwd = json.pwd;
+					key = json.key;
+					clearInterval(window.g_setWXscanInter);
+					var params = {
+						opr: 'pwdLogin', //smsLogin表示短信认证登录,pwdLogin表示密码认证登录
+						userName: username,
+						pwd: pwd,
+						auth_tag: key
+					};
+					//activateTab('pwd');
+					loginRequest(params, "mode_password_wx", $id("password_submitBtn"));
+				} else if (status === 1) {
+					js_alert("mode_WXscan", "");
+					activateTab('pwd');
+					openid = json.openid;
+					js_alert("mode_password", json.msg || _("You have no factors bound. Please log in using account."));
+					g_WXscanOpenID = openid;
+					clearInterval(window.g_setWXscanInter);
+				} else if (status === 4) {
+					js_alert("mode_WXscan", json.msg || _("Failed to log in with WeChat because the server cannot be connected."));
+				} else {
+					js_alert("mode_WXscan", "");
+				}
+			}
+		},
+		error: function(json) {}
+	});
+}
+//判断是否是IPv4，v6，返回处理后的location.host
+function locationHost() {
+	var hostname = location.hostname,
+		host = location.host,
+		port = location.port;
+	// 如果是IPv6，并且没有中括号，则加上
+	if (hostname.indexOf(":") >= 0) {
+		// 如果有中括号
+		if (/^\[.*\]$/.test(hostname)) {
+			//hostname = hostname.slice(1, hostname.length-1);
+		} else {
+			hostname = "[" + hostname + "]";
+		}
+		// IE在IPv6下host有误，IP不带中括号
+		host = hostname + (port ? (":" + port) : "");
+	}
+	return host;
+}
+
+//生成跳转登陆页面的url,端口为80
+function createLoginUrl(type) {
+	//默认不传值，如果传了就判断是不是取domain
+	if (type === 'domain') {
+		var domain = getUrlParam('domain_wechat');
+		if (domain) {
+			if (window.location.port) {
+                return window.location.protocol + '//'  + domain + ':' + window.location.port;
+            } else {
+                return window.location.protocol + '//'  + domain;
+            }
+		}
+	}
+	var hostname = location.hostname,
+		host,
+		port = location.port;
+	// 如果是IPv6，并且没有中括号，则加上
+	if (hostname.indexOf(":") >= 0) {
+		// 如果有中括号
+		if (/^\[.*\]$/.test(hostname)) {
+			//hostname = hostname.slice(1, hostname.length-1);
+		} else {
+			hostname = "[" + hostname + "]";
+		}
+
+	}
+
+	host = hostname;
+
+	return location.protocol + "//" + host + (port ? (":" + port) : "");
+}
+
+//生成二维码url
+function create_qrcode_url(type) {
+	var urlIp = getUrlParam("ip"),
+		urlR = getUrlParam("r"),
+		urlT = getUrlParam("t"),
+		urlVlanid = getUrlParam("vlanid"),
+		urlc = getUrlParam("c"),
+		controller_type = getUrlParam("controller_type"),
+		_ID_ = getUrlParam("_ID_"),
+		qrcsrv = getUrlParam('qrcsrv'),
+		url;
+	type = type || 'qcode';
+	url = createLoginUrl(type === 'wechat' ? 'domain' : 'domain') + "/ac_portal/" + type + ".html?ip=" + urlIp + "&r=" + urlR + "&t=" + urlT + "&c=" + urlc + "&vlanid=" + urlVlanid + "&controller_type=" + controller_type + "&_ID_=" + _ID_ + "&qrcsrv=" + qrcsrv;
+
+
+	return url;
+}
+
+//生成2维码
+function create_qrcode(text, typeNumber, errorCorrectLevel, table) {
+	var qr = qrcode(typeNumber || 10, errorCorrectLevel || 'L');
+	qr.addData(text);
+	qr.make();
+	var ua = window.navigator.userAgent;
+	//ie6,ie7使用tab
+	if (ua.indexOf("MSIE 7") > -1 || ua.indexOf("MSIE 6") > -1) {
+		return qr.createTableTag();
+	}
+	return qr.createImgTag();
+};
+
+// 获取当前设备相关信息
+function getDeviceInfo() {
+	var UA = (navigator.userAgent).toLowerCase();
+	return {
+		ratio: window.devicePixelRatio || 1,
+		isMobile: /(android|mobile|windows (ce|phone)|kindle|blackberry|psp|palm|symbian)/.test(UA),
+		isIpad: /ipad/.test(UA),
+		isIOS: /(iphone|ipad|ipod|mac os)/.test(UA),
+		isAndroid: /android/.test(UA),
+		isMQQBrowser: /mqqbrowser/.test(UA),
+		isWeChat: /micromessenger/.test(UA)
+	}
+}
+
+function initWechatLink() {
+	var deviceInfo = getDeviceInfo(),
+		isPreview = getUrlParam("ispreview");
+
+	if (!deviceInfo.isWeChat && (deviceInfo.isIOS || (deviceInfo.isMQQBrowser && deviceInfo.isAndroid) || isPreview)) {
+		var href = deviceInfo.isIOS ? "weixin://" : "http://weixin.qq.com/r/";
+		$("#wechat_link").attr("href", href);
+		$("#wechat_link").show();
+	} else {
+		$("#wechat_link").hide();
+	}
+}
+
+//判断ios11.3及以上
+function isIphone11() {
+	var UA = String(navigator.userAgent).toLowerCase();
+	//是否是ios11以上
+	var ver = UA.match(/cpu iphone os 11_(.*?) like/);
+	var ios11 = false;
+	if (ver) {
+		ios11 = parseInt(ver[1], 10) >= 3 ? true : false;
+		if (ios11) {
+			return ios11;
+		}
+	}
+	//是否是ios12.*及以上
+	ver = UA.match(/cpu iphone os (.*?) like/);
+	if (ver) {
+		ios11 = parseInt(ver[1], 10) > 11 ? true : false;
+	}
+	//是否是自动弹出的网页（mozilla/5.0 (iphone; cpu iphone os 11_3 like mac os x) applewebkit/601.1.46 (khtml, like gecko) version/9.0 mobile/13b143）	
+	return ios11;
+}
+
+function changeA() {
+	//判断当前版本是不是ios11.3，且是自动弹出portal页面
+	var UA = String(navigator.userAgent).toLowerCase();
+	var isiphone = UA.indexOf('iphone') > -1;
+	var isIos113 = isIphone11();
+	var isSafari = UA.indexOf('safari') > -1;
+	var isbrowser = UA.indexOf('browser') > -1;
+	if (isiphone && isIos113 && !isSafari && !isbrowser) {
+		return true;
+	}
+	return false;
+}
+
+function callWechatBrowser_ex() {
+	var safariid = getUrlParam("safariid");
+	safariid = safariid.toString();
+	if (safariid === "1") {
+		$(document.getElementById('wx_safari')).html("Communicating with WeChat");
+		callWechatBrowser();
+	} else if (safariid !== "2"){
+		if (changeA()) {
+			document.getElementById("wechat_wifi_btn_new").style.display = "";
+			document.getElementById('wx_safari').href = window.location.href + (window.location.search != "" ? "&" : "?") + "safariid=1";
+
+		} else {
+			document.getElementById("wechat_wifi_btn_old").style.display = "";
+		}
+	}
+}
+function callWechatBrowser_ex_wxscan() {
+	var safariid = getUrlParam("safariid");
+	safariid = safariid.toString();
+	if (safariid === "2") {
+		$(document.getElementById('wx_safari_scan')).html("Communicating with WeChat");
+		var exParams = "userName="+encodeURIComponent(getUrlParam('userName'))+"&pwd="+getUrlParam('pwd')+"&auth_tag="+getUrlParam('auth_tag');
+		callWechatBrowser('WXscan', exParams);
+	} else if (safariid !== "1") {
+		if (changeA()) {
+			
+			document.getElementById("wechat_wifi_btn_new_wxscan").style.display = "";
+			document.getElementById('wx_safari_scan').href = window.location.href + (window.location.search != "" ? "&" : "?") + "safariid=2";
+		} else {
+			document.getElementById("wechat_wifi_btn_old_wxscan").style.display = "";
+		}
+	}
+}
+//短信后微信认证和短信认证或者微信认证不能同时使用
+function isIos11_3(){
+	
+	var smswififlag = getUrlParam("smswififlag");
+	var urlip = getUrlParam("ip");
+	
+	if(changeA())
+	{
+
+		//判断当前是否是短信后微信认证，如果是则显示a标签，如果不是则走默认的逻辑
+		if(smswififlag == "1"){
+			document.getElementById("jump_safari_id").style.display="inline-block";
+		}else{
+			document.getElementById("sms_submitBtn").style.display="";
+		}
+				
+	}else{
+		document.getElementById("sms_submitBtn").style.display="";
+	}
+}
+
+function jump_safari() {
+	if (!smsValidtor('sms')) return false;
+	var userName = $id("sms_name").value;
+	var pwd = $id("sms_pwd").value;
+	var rememberPwd = $id("rememberSms").checked ? '1' : '0';
+	document.getElementById('jump_safari_id').href = window.location.href + (window.location.search != "" ? "&" : "?") + "safariidsms=1&opr=smsLogin&userName=" + userName + "&pwd=" + pwd + "&rememberSms=" + rememberSms;
+}
+function do_encrypt_rc4(src, passwd) {
+	src = $.trim(src+'');
+	passwd = passwd + '';
+	var i, j = 0, a = 0, b = 0, c = 0, temp;
+	var plen = passwd.length,
+		size = src.length;
+
+	var key = Array(256); //int
+	var sbox = Array(256); //int
+	var output = Array(size); //code of data
+	for (i = 0; i < 256; i++) {
+		key[i] = passwd.charCodeAt(i % plen);
+		sbox[i] = i;
+	}
+	for (i = 0; i < 256; i++) {
+		j = (j + sbox[i] + key[i]) % 256;
+		temp = sbox[i];
+		sbox[i] = sbox[j];
+		sbox[j] = temp;
+	}
+	for (i = 0; i < size; i++) {
+		a = (a + 1) % 256;
+		b = (b + sbox[a]) % 256;
+		temp = sbox[a];
+		sbox[a] = sbox[b];
+		sbox[b] = temp;
+		c = (sbox[a] + sbox[b]) % 256;
+		temp = src.charCodeAt(i) ^ sbox[c];//String.fromCharCode(src.charCodeAt(i) ^ sbox[c]);
+		temp = temp.toString(16);
+		if (temp.length === 1) {
+			temp = '0' + temp;
+		} else if (temp.length === 0) {
+			temp = '00';
+		}
+		output[i] = temp;
+	}
+	return output.join('');
+}
+//设置登录页面或完善信息页面、短信快捷登录页面以及会议室二维码信息项页面，如果发送了验证码退出页面又重新进入，验证码继续倒计时
+function setOldCodeState() {
+	//顺序分别为 注册页面手机号、注册页面邮箱、完善信息页面手机号、完善信息页面邮箱、短信快捷登录页面手机号、会议室二维码页面手机号
+	var regPhoneRemainTime = parseInt(cookie.get("regPhoneRemainTime")),
+		regPhoneRemainTimeSpan = parseInt(cookie.get("regPhoneRemainTimeSpan")),
+
+		regMailRemainTime = parseInt(cookie.get("regMailRemainTime")),
+		regMailRemainTimeSpan = parseInt(cookie.get("regMailRemainTimeSpan")),
+
+		comPhoneRemainTime = parseInt(cookie.get("comPhoneRemainTime")),
+		comPhoneRemainTimeSpan = parseInt(cookie.get("comPhoneRemainTimeSpan")),
+
+		comMailRemainTime = parseInt(cookie.get("comMailRemainTime")),
+		comMailRemainTimeSpan = parseInt(cookie.get("comMailRemainTimeSpan")),
+
+		fastRemainTime = parseInt(cookie.get("fastRemainTime")),
+		fastRemainTimespan = parseInt(cookie.get("fastRemainTimespan")),
+
+		mtqrcodePhoneRemainTime = parseInt(cookie.get("mtqrcodePhoneRemainTime")),
+		mtqrcodePhoneRemainTimeSpan = parseInt(cookie.get("mtqrcodePhoneRemainTimeSpan")),
+
+		comInfoPhoneRemainTime = parseInt(cookie.get("comInfoPhoneRemainTime")),
+		comInfoPhoneRemainTimeSpan = parseInt(cookie.get("comInfoPhoneRemainTimeSpan")),
+
+		optSmsCodeRemainTime = parseInt(cookie.get("optSmsCodeRemainTime")),
+		optSmsCodeRemainTimeSpan = parseInt(cookie.get("optSmsCodeRemainTimeSpan")),
+
+		comInfoMailRemainTime = parseInt(cookie.get("comInfoMailRemainTime")),
+		comInfoMailRemainTimeSpan = parseInt(cookie.get("comInfoMailRemainTimeSpan"));
+
+	var timeArr = [regPhoneRemainTime, regMailRemainTime, comPhoneRemainTime, comMailRemainTime, fastRemainTime, mtqrcodePhoneRemainTime, comInfoPhoneRemainTime, comInfoMailRemainTime, optSmsCodeRemainTime],
+		spanArr = [regPhoneRemainTimeSpan, regMailRemainTimeSpan, comPhoneRemainTimeSpan, comMailRemainTimeSpan, fastRemainTimespan, mtqrcodePhoneRemainTimeSpan, comInfoPhoneRemainTimeSpan, comInfoMailRemainTimeSpan, optSmsCodeRemainTimeSpan];
+
+	var btnArr = ['regest_phone_attr_getSmsCodeBtn', 'regest_mail_attr_getEmailCodeBtn', 'complete_phone_attr_getSmsCodeBtn', 'complete_mail_attr_getEmailCodeBtn', 'mobilefast_getCodeBtn', 'mtqrcode_phone_attr_getSmsCodeBtn', 'completeInfo_phone_attr_getSmsCodeBtn', 'completeInfo_mail_attr_getEmailCodeBtn', 'mode_verifyIdentidy-sms_getCodeBtn'],
+		inputArr = ['regest_phone_attr', 'regest_mail_attr', 'complete_phone_attr', 'complete_mail_attr', 'mobilefast_name', 'mtqrcode_phone_attr', 'completeInfo_phone_attr', 'completeInfo_mail_attr', 'mode_verifyIdentidy-sms_pwd'];
+
+	regPhoneNumber = cookie.get("regPhoneNumber");
+	regMail = cookie.get("regMail");
+
+	comPhoneNumber = cookie.get("comPhoneNumber");
+	comMail = cookie.get("comMail");
+
+	fastMobile = cookie.get("fastPhoneNumber");
+
+	mtqrcodePhoneNumber = cookie.get("mtqrcodePhoneNumber");
+
+	comInfoPhoneNunber = cookie.get("comInfoPhoneNunber");
+	comInfoMail = cookie.get("comInfoMail");
+	optSmsCode = cookie.get("optSmsCode");
+
+	var valueArr = [regPhoneNumber, regMail, comPhoneNumber, comMail, fastMobile, mtqrcodePhoneNumber, comInfoPhoneNunber, comInfoMail, optSmsCode];
+	//初始化时如果之前有发送过验证码就继续进行计时
+	for (var i = 0; i < timeArr.length; i++) {
+		timespan = timeArr[i] - Math.floor(((new Date()).getTime() - parseInt(spanArr[i])) / 1000);
+		if (timeArr[i] > 0) {
+			if ($id(btnArr[i])) {
+				$id(btnArr[i]).disabled = true;
+			}
+			if ($id(inputArr[i])) {
+				$id(inputArr[i]).value = valueArr[i];
+			}
+			if (i === 0 || i === 1) {
+				afterGetAllCodeState({
+					success: true
+				}, {
+					userName: valueArr[i]
+				}, "mode_regestUser", $id(btnArr[i]), timespan);
+			} else if (i === 2 || i === 3) {
+				afterGetAllCodeState({
+					success: true
+				}, {
+					userName: valueArr[i]
+				}, "mode_complete", $id(btnArr[i]), timespan);
+			} else if (i === 4) {
+				afterGetSmsCodeSate({
+					success: true
+				}, {
+					userName: valueArr[i]
+				}, "mode_mobile", $id(btnArr[i]), timespan);
+			} else if (i === 5) {
+				afterGetAllCodeState({
+					success: true
+				}, {
+					userName: valueArr[i]
+				}, "mode_mtqrcode_info", $id(btnArr[i]), timespan);
+			} else if (i === 8) {
+				afterGetAllCodeState({
+					success: true
+				}, {
+					userName: valueArr[i]
+				}, "mode_verifyIdentidy", $id(btnArr[i]), timespan);
+			} else {
+				afterGetAllCodeState({
+					success: true
+				}, {
+					userName: valueArr[i]
+				}, "mode_complete_userInfo", $id(btnArr[i]), timespan);
+			}
+		} else {
+			if ($id(inputArr[i])) {
+				$id(inputArr[i]).value = valueArr[i];
+			}
+		}
+	}
+}
+function sendUA () {
+	var timeStamp = String(new Date().valueOf());
+    $.ajax({
+        url: "/terminal_info",
+        type: 'POST',
+        data:{ 
+			tag: timeStamp,
+			userAgent: do_encrypt_rc4(navigator.userAgent, timeStamp), 
+			platform: do_encrypt_rc4(navigator.platform, timeStamp)
+		},
+		contentType:"application/x-www-form-urlencoded"
+    })
+}
+$(document).ready(function() {
+	sendUA();
+	doLocalHtml();
+    var isPreview = (window.top.location.search.indexOf('is_preview') !== -1);
+	var pop = getUrlParam("pop"),
+		type = getUrlParam("type"),
+		tabs = getUrlParam('tabs') || '',
+		tabsArr = tabs.split('-'),
+		remainTime, phoneNumber, timespan;
+	if (pop === "1" && type === "logout") {
+		enablePop(true);
+	}
+	//定时请求后台,二维码认证才会发请求
+	if (tabsArr.indexOf('qrcode') > -1 && !isPreview && type !== "logout") {
+		window.g_setInter = setInterval(ajaxQCode, 5000);
+	}
+	//定时请求后台,微信认证的二维码认证才会发请求
+	if (!isPreview && tabsArr.indexOf('wechat') > -1 && type !== "logout" && !/\/mobile\.html$/.test(window.location.pathname)) {
+		window.g_setWechatInter = setInterval(ajaxWechat, 5000);
+	}
+	remainTime = parseInt(cookie.get("remainTime"));
+	phoneNumber = cookie.get("phoneNumber");
+	if (remainTime) {
+		timespan = remainTime - Math.floor(((new Date()).getTime() - parseInt(cookie.get("remainTimespan"))) / 1000);
+		if (timespan > 0) {
+			$id("sms_getCodeBtn").disabled = true;
+			$id("sms_name").value = phoneNumber;
+			afterGetSmsCodeSate({
+				success: true
+			}, {
+				userName: phoneNumber
+			}, "mode_sms", $id("sms_getCodeBtn"), timespan);
+		}
+	} else if (phoneNumber) {
+		$id("sms_name").value = phoneNumber;
+	}
+	setOldCodeState();
+
+	var safariidsms = getUrlParam("safariidsms");
+	safariidsms = safariidsms.toString();
+	if (safariidsms === "1") {
+		var userName = getUrlParam("userName");
+		var pwd = getUrlParam("pwd");
+		var rememberPwd = getUrlParam("rememberPwd") ? '1' : '0';
+		$('#sms_name').attr('value', userName).siblings('label').hide();
+		$('#sms_pwd').attr('value', pwd).siblings('label').hide();
+
+		var params = {
+			opr: 'smsLogin',
+			userName: userName,
+			pwd: pwd,
+			rememberPwd: rememberPwd
+		};
+		loginRequest(params, "mode_sms", $id("sms_submitBtn"));
+	}
+
+	//如果是通过直接请求的logout页面，需要发个请求通知服务端
+	if (type === "logout") {
+		$.ajax({
+			url: g_smsackUrl,
+			type: "GET",
+			success: function(resp) {
+				if (window.console && window.console.log) {
+					console.log("sms_ack");
+				}
+			}
+		});
+	}
+
+	$('.login_box_msg').click(function() {
+		$(this).hide();
+	});
+
+	$(window).resize(function(event) {
+		setTimeout(function() {
+			onReSizeLoginWin();
+		}, 500);
+	});
+	$(window).trigger('resize');
+
+	$(document).click(function(ev) {
+		var $dom = $('#tabUl_bottom_left_more');
+		if (!$dom.is(':hidden')) {
+			$dom.hide();
+		}
+	});
+
+	// $(document).mouseout(function(event) {
+	// 	var $dom = $(this);
+	// 	if (!$dom.is('.auth-way-item') && !$dom.parents('.auth-way-item')[0] &&
+	// 		!$dom.is('.more-auth_way-wrap') && !$dom.parents('.more-auth_way-wrap')[0]) {
+	// 		$('#tabUl_bottom_left_more').hide();
+	// 	}
+	// });
+});
+function onReSizeLoginWin () {
+	var ht = window.innerHeight,
+		curH = Math.max(+(window.innerHeight-140), 300);
+	$('.login-extend-win').height(curH);
+
+	// 调整更多认证的位置
+	var $more = $('#tabUl_bottom_left_more');
+	if (!$more) {
+		return;
+	}
+	var moreH = (+($more.height()) || 0) + 10,
+		top = 40;
+	if (ht < 570) {
+		top = -moreH;
+		$more.addClass('top');
+	} else {
+		$more.removeClass('top');
+	}
+	$more.css('top', top);
+}
+//如果认证方式包含other_oauth即第三方oauth认证时，提前获取图片的base64编码
+function initOtherOauthIcon() {
+	//第三方oauth服务器的名称
+	var oauthSrv = getUrlParam("oauthsrv", true);
+	if (oauthSrv !== '') {
+		$.ajax({
+			type: 'GET',
+			url: "/ac_portal/get_oauth_icon?oauthsrv=" + encodeURIComponent(oauthSrv),
+			success: function(json) {
+				successFn(json);
+			},
+			error: function(json) {
+				error(_("Network connection error occurred."));
+			}
+		});
+
+		function error(msg) {
+			js_alert("mode_other_oauth", _("Network connection error occurred."));
+		}
+
+		function successFn(json) {
+			g_other_oauth_icon = json;
+			$("#other-oauth-icon").attr('src', json);
+			// $('img.other-auth').attr('src', json);
+			initTabs();
+		}
+	}
+}
+
+//如果认证方式是saml认证时，提前获取图片的base64编码
+function initSamlOauthIcon() {
+	//第三方oauth服务器的名称
+	var samlsrv = getUrlParam("samlsrv", true);
+	if (samlsrv !== '') {
+		$.ajax({
+			type: 'GET',
+			url: "/ac_portal/get_saml_icon?samlsrv=" + encodeURIComponent(samlsrv),
+			success: function(json) {
+				successFn(json);
+			},
+			error: function(json) {
+				error(_("Network connection error occurred."));
+			}
+		});
+
+		function error(msg) {
+			// 请求失败，把默认的搞上去
+			$("#saml-oauth-icon").attr('src', g_saml_icon);
+			js_alert("mode_saml", _("Network connection error occurred."));
+		}
+
+		function successFn(json) {
+			g_saml_icon = json;
+			$("#saml-oauth-icon").attr('src', json);
+			initTabs();
+		}
+	}
+}
+
+//新增加的认证方式WXscan的二维码url获取和拼接
+function getWXscanUrlParams() {
+    var ip = getUrlParam('ip');
+    $.ajax({
+        type: 'GET',
+        url: '/staff_auth/getparam.html?ip=' + ip,
+        success: function(json) {
+            successFn(json);
+        },
+        error: function(json) {
+            error(json.msg || _("Network connection error occurred."));
+        }
+    });
+
+    function error(msg) {
+        js_alert("mode_WXscan", msg);
+    }
+
+    function successFn(json) {
+        var url = "https://open.weixin.qq.com/connect/oauth2/authorize?" + json;
+        $("#WXscan_qrcodeImg").html(create_qrcode(url, "12", "L"));
+    }
+}
+
+function openMoaPage (type) {
+    var isPreview = (window.top.location.search.indexOf('is_preview') !== -1);
+
+    // 预览下拦截所有跳转
+    if (isPreview) {
+        return;
+    }
+	var prefix;
+	if (window.location.href.indexOf('~normal~https~ipdefault-portdefault')>-1) {
+        prefix = location.href.replace(/^(.+~normal~https~ipdefault-portdefault).*$/, '$1');
+    } else {
+		prefix = window.location.protocol + "//" + window.location.hostname + (window.location.port ? ':' + window.location.port: '');
+	}
+    var url = prefix + "/ac_portal/get_auth_url?auth_type=moa";
+    if (type === 'mobile') {
+    	url += '&ttype=mobile';
+    }
+    var targetWndName = "MyWindow";
+    var wnd = window.open("",targetWndName);
+    var link = document.getElementById("link");
+    if (!link) {
+        $('body').append('<a id="link" href="javascript:void(0);" style="visibility:hidden;position:absolute;"></a>');
+        link = document.getElementById("link");
+    }
+    if (!link) {
+        window.open(url);
+    } else {
+        link.target = targetWndName;
+        link.href = url;
+        link.click();
+    }
+}
+
+/*
+    初始化tab状态,处理是一个tab还是多个tab的页面布局,
+    这个函数只会运行一次(根据不同的布局可自行修改下面代码)
+    在新的页面中会运行多次，因为认证类型图标是认证方式动态改变的
+*/
+function initTabs() {
+    var tabs = getUrlParam("tabs") || '';
+	var msg = getUrlParam("msg") || '';
+    if (tabs === ""){
+    	tabs = "pwd";
+    } else if (tabs.indexOf('WXscan') !== -1 || tabs.indexOf('WXscan_closelocal') !== -1) {
+
+			// 开启了【微信绑定后关闭本地密码认证】按钮，隐藏切换密码认证的链接，关闭密码认证
+			if (tabs.indexOf('_closelocal') !== -1) {
+				tabs = tabs.replace('_closelocal', '')
+				g_wxscan_closeLocal = true;
+			}
+
+    	tabs = tabs.replace(/^\s*WXscan\-|\-WXscan\s*$/g, '');
+    	tabs = tabs.replace('-WXscan-', '-');
+    	g_WXscan_enable = true;
+    	$('.jump-qrcode_account-link .jump-text')[g_wxscan_closeLocal ? 'hide' : 'show']();
+			$('.qrcode-tip').html(g_wxscan_closeLocal ? _('Scan with WeChat') : _('Scan to bind account to validate QR code based authentication'));
+    }
+    tabs = tabs.split("-");
+	if(msg) {
+		//第一个认证信息显示提示
+		js_alert('mode_login', msg);
+	}
+    createTabs(tabs);
+}
+//动态生成tabs
+function createTabs(tabs) {
+    //如果在js头部复制的话拿不到g_之类的标题数据，会导致渲染失败
+    TYPE_TEXT = {
+        sms: g_smsTabTitle, //短信认证
+        pwd: g_accountTabTitle, //账号密码认证
+        wechat: g_wechatTabTitle, //微信认证
+        qrcode: g_qrcodeTitle, //访客二维码
+        freeauth: "Open authentication",
+        mtqrcode: g_mtqrcodeTitle, //会议室二维码
+        WXscan: g_wxscanTitle, //微信扫码认证
+        mobile: g_smsQuickTitle, //短信快捷登录
+        cas: g_casTitle,
+        facebook: g_facebookTitle,
+        gmail: g_gmailTitle,
+        line: g_lineTitle,
+        twitter: g_twitterTitle,
+        qywechat: g_entwechatTitle,
+        dingtalk: g_dingtalkTitle,
+				twoAuthOpt: window.g_twoAuthOptTitle || '',  // 新增变量的时候需要考虑自定义模板或者定制页面的影响
+        moa: g_moaTitle,
+        other_oauth: g_otherTitle,
+		saml: window.g_samlTitle || '' // 新增变量的时候需要考虑自定义模板或者定制页面的影响
+    }
+    //是否要显示注册按钮
+    var policy = getUrlParam("policy");
+    if (policy) {
+        var regHtml = '<a href="javascript:void(0);" style="float:right;line-height:30px;" onclick="activatePage(&quot;regestUser&quot;)">' + g_registerButtonText + '</a>';
+        $("#tabsUl_bottom_right").show().html(regHtml);
+    }
+    if (!tabs) {
+        return;
+    }
+    
+    //各种认证方式的显示优先级
+    var tabPriotity = {
+            other_oauth : 1,
+            moa : 2,
+            dingtalk : 3,
+            qywechat : 4,
+            facebook : 5,
+            gmail : 6,
+            line : 7,
+            twitter : 8,
+            cas : 9,
+            pwd : 10,
+            wechat : 11,
+            sms : 12,
+            mtqrcode : 13,
+            qrcode : 14,
+            WXscan : 15
+    }
+    var firstTab = tabs[0];
+    tabPriotity[firstTab] = 0;
+    var defaultIcons = tabs.sort(function(a, b) { return tabPriotity[a] - tabPriotity[b]; });
+
+    //用来保存所有底部的按钮
+    oriTabs = defaultIcons.concat();
+    //是否开启快捷登录
+    var showMobileSms = false;
+    var isMobileSms = getUrlParam("sms");
+    if (+isMobileSms === 1) {
+        showMobileSms = true;
+    }
+    var topHtml = []; //组装顶部菜单
+    var topTabs = [];
+    var headText;
+    var i = 0;
+    var first = defaultIcons[0];
+    if (first === 'pwd' && g_WXscan_enable && !g_wxscan_closeLocal) {
+    	first = 'WXscan';
+    }
+    // 是否包含短信快捷登录，如果有短信快捷登录，顶部的菜单显示优先展示的认证方式和短信快捷登录
+    // 2019.4.11要修改为账号密码绑定与手机验证码快捷登录绑定，切换到其他认证方式时不展示短信快捷登录
+    // 逻辑改为只要第一个优先展示的认证方式是pwd,顶部渲染为两个，否则为一个
+    if (first === 'pwd') {
+			 // 若开启了【微信绑定后关闭本地密码认证】，则first显示的为微信快捷登录
+			 first = g_wxscan_closeLocal ? 'WXscan' : first
+        topTabs = [first, "mobile"];
+        for (i = 0; i < topTabs.length; i++) {
+            headText = TYPE_TEXT[topTabs[i]] || '';
+            topHtml += '<li class="tabs-ul-top_item" style="width: 50%;">';
+            topHtml += '<div class="tabs-ul-top_text" onclick="activateTab(&quot;' + htmlEncode(topTabs[i]) + '&quot;)">' + headText;
+            topHtml += '</div></li>';
+        }
+    } else {
+        topTabs = [first];
+        for (i = 0; i < topTabs.length; i++) {
+            headText = TYPE_TEXT[topTabs[i]] || '';
+            topHtml += '<li class="tabs-ul-top_item" style="width: 100%;">';
+            topHtml += '<div class="tabs-ul-top_text" onclick="activateTab(&quot;' + htmlEncode(topTabs[i]) + '&quot;)">' + headText;
+            topHtml += '</div></li>';
+        }
+       
+    }
+    //去掉tabs中的第一个展示的，用于生成底部的按钮
+    defaultIcons.splice(0, 1);
+    $("#tabsUl_top").html(topHtml);
+    createBottomIcon(defaultIcons);
+    activateTab(topTabs[0]);
+
+    var $otherNav = $("#otherNav");
+    if ($otherNav) {
+    	//如果只有一个tabs,则隐藏其他方式
+	    if (oriTabs.length > 1) {
+	        window.hideOtherTabs = false;
+	    } else {
+	        window.hideOtherTabs = true;
+	        $otherNav.hide();
+	    }
+    }
+
+    if (first === 'qrcode') {
+    	first = defaultIcons[0];
+    }
+    window.FirstTabs = first;
+    if (!window.FirstTabs) {
+    	$('#mode_qrcode_info .login-head-top_right').hide();
+    	$('#mode_qrcode_info .login-head-top_right').hide();
+    	$("#return_tools").hide();
+        $("#logoHead").show();
+        $("#login_tools").show();
+    }
+}
+/**
+ * [createBottomIcon 生成底部图标，用于初始化界面和切换tab]
+ * @param  {[type]} defaultIcons [description]
+ */
+function createBottomIcon(defaultIcons) {
+    var bottomHtml = ''; //组装底部菜单
+    var moreIconHtml = ''; //底部菜单超过4个时，进行多余的组装
+    var len = defaultIcons.length,
+    	evAction;
+    for (var i = 0; i < len; i++) {
+        var bottomText,
+            imageSrc,
+            authWay = htmlEncode(defaultIcons[i]);
+        evAction = 'onclick="activateTab(&quot;' + authWay + '&quot;)"';
+        if (authWay === 'other_oauth') {
+            bottomText = htmlEncode(getUrlParam("oauthsrv", true));
+            imageSrc = g_other_oauth_icon;
+        } else if (authWay === 'saml') {
+            bottomText = htmlEncode(getUrlParam("samlsrv", true)) || TYPE_TEXT[authWay];
+            imageSrc = g_saml_icon;
+        } else {
+        	if (authWay === 'pwd' && g_WXscan_enable) {
+        		evAction = 'onclick="activateTab(&quot;WXscan&quot;)"';
+        	}
+            bottomText = TYPE_TEXT[authWay] || '';
+            imageSrc = '../share/res/extended_file/css/img/' + authWay + '.png';
+        }
+        var tickIcon = i === 0 ? '<img class="active-tick-icon" src="../share/res/extended_file/css/img/tick.png"/>' : '';
+        if (len < 7) {
+            bottomHtml += '<li class="auth-way-item" title="' + bottomText + '">';
+            bottomHtml += '<img class="auth-way-item-icon ' + authWay + '" src="' + imageSrc + '"' + evAction + '/>';
+            bottomHtml += tickIcon;
+            bottomHtml += '</li>';
+        } else {
+            if (i < 6) {
+                bottomHtml += '<li class="auth-way-item" title="' + bottomText + '">';
+                bottomHtml += tickIcon;
+                bottomHtml += '<img class="auth-way-item-icon ' + authWay + '" src="' + imageSrc + '"' + evAction + '/>';
+                bottomHtml += '</li>';
+            } else {
+                moreIconHtml += '<li class="auth-way-item" title="' + bottomText + '">';
+                moreIconHtml += '<img class="auth-way-item-icon ' + authWay + '" src="' + imageSrc + '"' + evAction + '/>';
+                moreIconHtml += '</li>';
+            }
+
+        }
+    }
+    if (len > 6) {
+        bottomHtml += '<li class="auth-way-item more-auth_way-item" title="' + _('More') + '">';
+        bottomHtml += '<span class="more-auth_way-btn" onclick="changeMoreIconStatus()"></span>';
+        bottomHtml += '</li>';
+    }
+
+    $("#tabsUl_bottom_left").empty().html(bottomHtml);
+    $("#tabUl_bottom_left_more").empty().html('<div class="more-auth_way-outer"><div class="more-auth_way-inner">' + moreIconHtml + '</div></div>');
+    $("#tabUl_bottom_left_more").hide();
+
+	$('.more-auth_way-item').bind('mouseover', function(event) {
+		$('#tabUl_bottom_left_more').show();
+	});
+}
+//展示或隐藏悬浮的图标
+//TODO还要再处理一下鼠标点击页面其他地方时，对悬浮的图标区域进行隐藏
+function changeMoreIconStatus() {
+    var more = $("#tabUl_bottom_left_more");
+    if (more.css('display') === 'none') {
+        more.show();
+    } else {
+        more.hide();
+    }
+}
+
+/* 主要用于扩展，不同模板有不同的处理*/
+function beforeActivateTab (tab, index) {
+
+}
+//激活短信认证，或密码认证tab取值sms/pwd(跟initChangeTabMethod关联，只要改initChangeTabMethod即可,定制一般不用改动)
+function activateTab(tab, index) {
+    var isPreview = (window.top.location.search.indexOf('is_preview') !== -1);
+	if ($('#mode_wxscanAccount')) {
+        $('#mode_wxscanAccount').hide();
+    }
+    if (window.g_setWXscanInter) {
+    	clearInterval(window.g_setWXscanInter);
+    }
+    beforeActivateTab(tab, index);
+    if (tab === "sms") {
+        mode_sms()
+    } else if (tab === 'qrcode') {
+        mode_qrcode();
+    } else if (tab === 'wechat') {
+        mode_wechat();
+    } else if (tab === 'freeauth') {
+        mode_freeauth();
+    } else if (tab === 'mtqrcode') {
+        mode_mtqrcode();
+    } else if (tab === 'mobile') {
+        mode_mobile();
+    } else if (tab === 'WXscan') {
+        mode_WXscan();
+        //定时请求后台，如果有微信扫码认证并且是pc端才会发请求，手机端使用拉起微信的方式
+        if (!isPreview && getUrlParam('tabs').indexOf('WXscan') > -1 && !/\/mobile\.html$/.test(window.location.pathname)) {
+            window.g_setWXscanInter = setInterval(ajaxWXscan, 500);
+        }
+    } else if (tab === 'pwd') {
+        mode_password();
+    } else if (tab === 'dingtalk') {
+        mode_dingtalk();
+    } else if (tab === 'qywechat') {
+        mode_qywechat();
+    } else if (tab === 'moa') {
+        mode_moa();
+    } else if (tab === 'facebook') {
+        mode_facebook();
+    } else if (tab === 'gmail') {
+        mode_gmail();
+    } else if (tab === 'line') {
+        mode_line();
+    } else if (tab === 'twitter') {
+        mode_twitter();
+    } else if (tab === 'cas') {
+        mode_cas();
+    } else if (tab === 'other_oauth') {
+        mode_other_oauth();
+    } else if(tab === 'saml') {
+		mode_saml();
+		} else if (tab === 'twoAuthOpt') {
+				mode_twoAuthOpt();
+		} else {
+        mode_password();
+    }
+
+    afterActivateTab(tab, index);
+}
+
+/* 主要用于扩展，不同模板有不同的处理*/
+function afterActivateTab (tab, index) {
+	var changeTabsBak = oriTabs && oriTabs.concat() || [],
+		item;
+    for (var i = changeTabsBak.length - 1; i >= 0; i--) {
+    	item = changeTabsBak[i];
+        /*if (tab === 'WXscan' && item === 'pwd') {
+            changeTabsBak.splice(i, 1);
+        }*/
+        /*if(tab === 'WXscan') {
+            tab = 'pwd';
+        }*/
+        if(tab === 'WXscan' || tab === 'mobile'){
+        	for(var j =0; j<changeTabsBak.length; j++){
+        		if(changeTabsBak[j] === 'pwd'){
+                    changeTabsBak.splice(j, 1);
+                    changeTabsBak.unshift('pwd');
+				}
+			}
+		}else if(tab === item ){
+            changeTabsBak.splice(i, 1);
+            changeTabsBak.unshift(tab);
+        }
+
+        /*if (tab === 'mobile') {
+            if (item === nowTab) {
+                changeTabsBak.splice(i, 1);
+            }
+        }*/
+    }
+    createBottomIcon(changeTabsBak);
+
+    var showMobileSms = false;
+    var isMobileSms = getUrlParam("sms");
+    if (+isMobileSms === 1) {
+        showMobileSms = true;
+    }
+    //切换顶部的菜单时，要改变样式
+    if (tab !== 'mobile') {
+        nowTab = tab;
+        if (tab === 'pwd' || (tab === 'WXscan' && g_wxscan_closeLocal)) {
+            //如果为密码，顶部为两个
+            var topHtml = [];
+            var headText;
+            var topTabs = [];
+            if (showMobileSms) {
+                topTabs = [tab, 'mobile'];
+                tabWidth = "50%";
+            } else {
+                topTabs = [tab];
+                tabWidth = "100%";
+            }
+
+            for (var i = 0; i < topTabs.length; i++) {
+                headText = TYPE_TEXT[topTabs[i]] || '';
+                topHtml += '<li class="tabs-ul-top_item" style="width:' + tabWidth + ';">';
+                topHtml += '<div title="'+ headText +'" class="tabs-ul-top_text" onclick="activateTab(&quot;' + htmlEncode(topTabs[i]) + '&quot;)">' + headText;
+                topHtml += '</div></li>';
+            }
+            $("#tabsUl_top").html(topHtml);
+            if (showMobileSms) {
+            	$('#tabsUl_top li:first').addClass('selected');
+            }
+        } else {
+            //否则顶部只渲染一个
+            var topHtml = [];
+            var headText;
+            var topTabs = [tab];
+            for (var i = 0; i < topTabs.length; i++) {
+                headText = TYPE_TEXT[topTabs[i]] || '';
+                topHtml += '<li class="tabs-ul-top_item" style="width: 100%;">';
+                topHtml += '<div class="tabs-ul-top_text" onclick="activateTab(&quot;' + htmlEncode(topTabs[i]) + '&quot;)">' + headText;
+                topHtml += '</div></li>';
+            }
+            $("#tabsUl_top").html(topHtml);
+        }
+    } else {
+    	$('#tabsUl_top li').removeClass('selected');
+    	$('#tabsUl_top li:eq(1)').addClass('selected');
+    }
+}
+
+
+function resetScrollTop() {
+    $('.mode-operate, .login_result, .login_operate, .mobile-body').scrollTop(0);
+}
+
+function handle802dot1x(){
+    var dot1x = getUrlParam('dot1x');
+    if(dot1x === '1' || dot1x === '0'){
+        $('.login-head-top_right').hide();
+        $('.download').hide();
+        $('.reg-and-com-audit .btn_ok').hide();
+        $('.reg-and-com-sueesss .btn_ok').hide();
+        $('#return_tools').hide();
+    }
+}
+
+//激活登录，修改密码，注销页面(根据不同的布局可自行修改下面代码)
+function activatePage(type, username, isByUrl, errorMsg) {
+    handle802dot1x();
+    $("#mode_oauthFailure").hide();
+    $("#login_inner").hide();
+    $("#mode_logout").hide();
+    $("#mode_changePwd").hide();
+    $("#mode_forgetPwd").hide();
+    $("#mode_regestUser").hide();
+    $("#mode_complete").hide();
+    $("#mode_login").hide();
+    $("#mode_freeauth").hide();
+    $("#mode_qrcode_info").hide();
+    $("#mode_mtqrcode_info").hide();
+
+    $("#mode_regAndComSuccess").hide(); //注册和完善信息成功显示弹窗
+    $("#mode_regAndComAudit").hide(); //注册和完善信息需要审核弹窗
+
+    $("#mode_complete_user").hide(); //终端注册页面点击已经拥有账号的跳转页面
+    $("#mode_complete_userInfo").hide(); //在终端注册页面点击已经拥有账号跳转页面提交用户名之后的页面
+
+		$("#mode_download_dynamicCode").hide(); //动态码引导页
+
+    //针对手机隐藏
+    $("#logoHead") && $("#logoHead").show();
+
+    $("#login_tools").show();
+    $("#changePwd_tools").hide();
+    $("#logout_tools").hide();
+
+    $('.login_box_msg').hide();
+    $('.win-bg').hide();
+    switch (type) {
+        case "logout":
+        	$("#login_inner").show();// addisclaimer模板的
+            $("#mode_logout").show();
+            $("#logout_tools").show();
+            $("#login_tools").hide();
+            if (username) {
+                $("#logout_name").html(htmlEncode(username));
+            }
+            break;
+        case "changePwd":
+            $('.win-bg').show();
+            // $("#login_inner").show();
+            $("#mode_changePwd").show();
+            // $("#changePwd_tools").show();
+            if (username) {
+                $("#changePwd_name").val(username);
+                $("#changePwd_name").siblings('label').css('opacity', 0);
+                if (!isByUrl) {
+                    $id("changePwd_name").readOnly = true;
+                    $("#changePwd_first").html("Password must be changed upon first login.");
+                }
+                return;
+            }
+            $("#changePwd_first").html("");
+            $id("changePwd_name").readOnly = false;
+            $('.win-bg').show();
+            break;
+        case "regestUser":
+            $('.win-bg').show();
+            $("#mode_regestUser").show();
+            getSysFields("regest");
+            // $("#changePwd_tools").show();
+            if (username) {
+                $("#regestUser_name").val(username);
+                $("#regestUser_name").siblings('label').css('opacity', 0);
+                return;
+            }
+            $('.win-bg').show();
+            break;
+            //终端自注册页面
+        case "completeUserIndex":
+            getSysFields("complete");
+            $("#mode_complete").show();
+            // $("#changePwd_tools").show();
+            if (username) {
+                $("#complete_username").attr('value', username);
+                $("#complete_username").siblings('label').css('opacity', 0);
+                $("#complete_username").attr("disabled", "disabled");
+                return;
+            }
+            break;
+            //终端自注册页面先跳转至输入用户名页面，提交用户名后跳转至完善信息页面
+        case "completeUserUser":
+            // getSysFields("complete");
+            $("#mode_complete_user").show();
+            // $("#changePwd_tools").show();
+            break;
+            //终端自注册页面先跳转至输入用户名页面，提交用户名后跳转至完善信息页面
+        case "completeUserInfo":
+            // getSysFields("completeInfo");
+            $("#mode_complete_userInfo").show();
+            // $("#changePwd_tools").show();
+            if (username) {
+                $("#completeInfo_username_default").attr('value', username);
+                $("#completeInfo_username_default").attr("disabled", "disabled");
+            }
+            break;
+        case "forgetPwd":
+            $('.win-bg').show();
+            moveToStep(0);
+            $("#mode_forgetPwd").show();
+            // $("#changePwd_tools").show();
+            var username = $("#password_name").val();
+            if (username.trim() !== "") {
+                $("#find_pwd_username").val(username);
+            }
+            $('.win-bg').show();
+            break;
+        case 'mode_qrcode_info':
+            $('.win-bg').show();
+            window.returnIndex = 'qrcode';
+            getQrcodeSysFields();
+            $("#mode_qrcode_info").show();
+            break;
+        case 'mode_mtqrcode_info':
+            window.returnIndex = 'mtqrcode';
+            $("#mode_mtqrcode_info, .win-bg").show();
+            break;
+        case 'regAndComSuccess':
+            $("#mode_regAndComSuccess").show();
+            break;
+        case 'regAndComAudit':
+            $("#mode_regAndComAudit").show();
+            break;
+				case 'downdymanicCodeApp':
+							// 动态码下载引导页，默认选择Microsoft Authenticator
+						$('.win-bg').show();
+						$('#mode_download_dynamicCode').show();
+						changeDynamicTab('microsoft');
+						break;
+				case 'getAuthCode':
+						// 获取密钥/秘钥弹窗(从动态码指引页打开)
+						$('#mode_download_dynamicCode, .win-bg').show();
+						initCreditSecret();
+						break;
+				case 'getOverdueCode': 
+						// 获取密钥/秘钥弹窗(从二次认证登录页打开)
+						$("#login_inner").show();
+						$("#mode_login").show()
+						initCreditSecret();
+						break;
+				case 'twoAuthOpt':
+						// 二次认证登录页面
+						$("#mode_download_dynamicCode").hide();
+						$("#mode_login, #login_inner").show();
+						$("#two-auth-mode_dynamicCode").show();
+						break;
+        case "oauthFailure":
+						$("#login_inner").show();
+						$("#mode_oauthFailure").show();
+						$("#login_tools").hide();
+						$("#logout_tools").show();
+						if (errorMsg) {
+								$("#failureMsg").html(htmlEncode(errorMsg));
+						}
+						break;
+        case "login":
+            window.location = createLoginUrl() + "/ac_portal/needauth.html?vlanid=" + getUrlParam("vlanid") + "&urlip=" + getUrlParam("urlip") + "&_ID_=" + getUrlParam("_ID_") + "&url=" + getUrlParam("url");
+            break;
+        case 'firstTabs':
+         	$("#login_inner").show();
+            activateTab(window.FirstTabs || 'pwd');
+            $("#login_tools").show();
+            $("#mode_login").show();
+            break;
+        // case "frontLogin":
+        //     $("#login_inner").show();
+        //     activateTab(window.returnIndex || 'pwd', window.pwdTabIndex);
+        //     $("#login_tools").show();
+        //     $("#mode_login").show();
+        //     break;
+        default:
+            $("#login_inner").show();
+            $("#login_tools").show();
+            $("#mode_login").show();
+    }
+    if (type !== 'mode_qrcode_info' && type !== 'mode_mtqrcode_info') {
+    	window.returnIndex = '';
+    }
+    if(getUrlParam('tabs') === 'freeauth'){
+        $('#mode_freeauth').show();
+    }
+}
+/*
+    实现mode_password显示密码认证的方法，
+    mode_sms显示短信认证的方法，主要提供给activateTab使用,
+    这个函数只会运行一次(根据不同的布局可自行修改下面代码)
+*/
+function initChangeTabMethod() {
+    var isOriginQrcode; //标志在访客二维码认证中是否直接显示二维码
+    var audit = getUrlParam('audit');
+    if (+audit === 2) {
+        isOriginQrcode = false;
+    } else {
+        isOriginQrcode = true;
+    }
+    var mode_password, mode_sms, mode_wechat, mode_qrcode, mode_freeauth, interval_wechat;
+    var mode_mtqrcode,
+        mode_WXscan,
+        mode_mobile,
+        mode_dingtalk,
+        mode_qywechat,
+        mode_moa,
+        mode_facebook,
+				mode_twoAuthOpt,
+        mode_gmail,
+        mode_line,
+        mode_twitter,
+        mode_cas,
+		mode_saml,
+        mode_other_oauth;
+    if (/IE/.test(navigator.userAgent) || /MQQBrowser/.test(navigator.userAgent)) {
+        mode_password = function() {
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $("#mode_freeauth").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_password").show();
+            $(".username .focus").focus();
+            $("#login_tools_changePwd").show();
+        };
+
+        mode_sms = function() {
+            $("#mode_password").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_mtqrcode').hide();
+            $("#mode_freeauth").hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_sms").show();
+            $(".phone .focus").focus();
+            $("#login_tools_changePwd").hide();
+        };
+
+        mode_qrcode = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_wechat").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_freeauth").hide();
+            // setQrcodeAuditType();
+            if (isOriginQrcode) {
+                $("#mode_qrcode").show();
+            } else {
+                activatePage("mode_qrcode_info");
+                // $("#mode_qrcode_info").show();
+            }
+            createQrcode();
+        };
+
+        mode_wechat = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_freeauth").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $("#mode_wechat").show();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            syncWechatDiv();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            interval_wechat = setInterval(syncWechatDiv, 15000);
+        };
+
+        mode_freeauth = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_freeauth").show();
+        };
+
+        mode_mtqrcode = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_mtqrcode").show();
+        };
+
+        mode_WXscan = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            getWXscanUrlParams();
+            $("#mode_WXscan").show();
+        };
+
+        mode_mobile = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_mobile").show();
+        };
+
+        mode_dingtalk = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_dingtalk").show();
+        };
+
+        mode_qywechat = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_qywechat").show();
+        };
+
+        mode_moa = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_moa").show();
+            openMoaPage();
+        };
+
+        mode_facebook = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_facebook").show();
+        };
+
+        mode_gmail = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_gmail").show();
+        };
+
+        mode_line = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_line").show();
+        };
+
+        mode_twitter = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_twitter").show();
+        };
+
+        mode_cas = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_twitter').hide();
+            $("#mode_cas").hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_cas").show();
+        };
+
+        mode_other_oauth = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $("#mode_cas").hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_other_oauth").show();
+        };
+
+		mode_saml = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $("#mode_cas").hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_saml").show();
+        };
+
+				mode_twoAuthOpt = function() {
+					$("#mode_password").hide();
+					$("#mode_qrcode").hide();
+					$("#mode_wechat").hide();
+					$('#mode_mtqrcode').hide();
+					$("#mode_freeauth").hide();
+					$('#mode_WXscan').hide();
+					$('#mode_mobile').hide();
+					$('#mode_dingtalk').hide();
+					$('#mode_qywechat').hide();
+					$('#mode_moa').hide();
+					$('#mode_facebook').hide();
+					$('#mode_gmail').hide();
+					$('#mode_line').hide();
+					$('#mode_twitter').hide();
+					$('#mode_cas').hide();
+					$('#mode_other_oauth').hide();
+					$("#mode_sms").hide();
+					if (interval_wechat) clearInterval(interval_wechat);
+					interval_wechat = null;
+					$("#two-auth-mode_dynamicCode").show();
+					$(".password .focus").focus();
+				};
+    } else {
+        //切换
+        mode_password = function() {
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_freeauth").hide();
+            $("#mode_password").fadeIn();
+            $(".username .focus").focus();
+            $("#login_tools_changePwd").show();
+        };
+
+        mode_sms = function() {
+            $("#mode_password").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_freeauth").hide();
+            $("#mode_sms").fadeIn();
+            $(".phone .focus").focus();
+            $("#login_tools_changePwd").hide();
+        };
+
+        mode_qrcode = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_wechat").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_freeauth").hide();
+            createQrcode();
+            // $("#mode_qrcode").fadeIn();
+            if (isOriginQrcode) {
+                $("#mode_qrcode").fadeIn();
+            } else {
+                activatePage("mode_qrcode_info");
+                // $("#mode_qrcode_info").fadeIn();
+            }
+        };
+
+        mode_wechat = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_freeauth").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            syncWechatDiv();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            interval_wechat = setInterval(syncWechatDiv, 15000);
+            $("#mode_wechat").fadeIn();
+        };
+
+        mode_freeauth = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_freeauth").fadeIn();
+        };
+
+        mode_mtqrcode = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_mtqrcode").fadeIn();
+        };
+
+        mode_WXscan = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            getWXscanUrlParams();
+            $("#mode_WXscan").fadeIn();
+        };
+
+        mode_mobile = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_mobile").fadeIn();
+        };
+
+        mode_dingtalk = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_dingtalk").fadeIn();
+        };
+
+        mode_qywechat = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_qywechat").fadeIn();
+        };
+
+        mode_moa = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_moa").fadeIn();
+            openMoaPage();
+        };
+
+        mode_facebook = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_facebook").fadeIn();
+        };
+
+        mode_gmail = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_gmail").fadeIn();
+        };
+
+        mode_line = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_line").fadeIn();
+        };
+
+        mode_twitter = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $('#mode_cas').hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_twitter").fadeIn();
+        };
+
+        mode_cas = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $("#mode_cas").hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_cas").fadeIn();
+        };
+
+        mode_other_oauth = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $("#mode_cas").hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_other_oauth").fadeIn();
+        };
+
+				mode_twoAuthOpt = function() {
+					$("#mode_password").hide();
+					$("#mode_qrcode").hide();
+					$("#mode_wechat").hide();
+					$('#mode_mtqrcode').hide();
+					$("#mode_freeauth").hide();
+					$('#mode_WXscan').hide();
+					$('#mode_mobile').hide();
+					$('#mode_dingtalk').hide();
+					$('#mode_qywechat').hide();
+					$('#mode_moa').hide();
+					$('#mode_facebook').hide();
+					$('#mode_gmail').hide();
+					$('#mode_line').hide();
+					$('#mode_twitter').hide();
+					$('#mode_cas').hide();
+					$('#mode_other_oauth').hide();
+					$("#mode_sms").hide();
+					if (interval_wechat) clearInterval(interval_wechat);
+					interval_wechat = null;
+					$("#two-auth-mode_dynamicCode").fadeIn();
+					$(".password .focus").focus();
+				};
+
+		mode_saml = function() {
+            $("#mode_password").hide();
+            $("#mode_sms").hide();
+            $("#mode_qrcode").hide();
+            $("#mode_wechat").hide();
+            $('#mode_freeauth').hide();
+            $('#mode_mtqrcode').hide();
+            $('#mode_WXscan').hide();
+            $('#mode_mobile').hide();
+            $('#mode_dingtalk').hide();
+            $('#mode_qywechat').hide();
+						$("#two-auth-mode_dynamicCode").hide();
+            $('#mode_moa').hide();
+            $('#mode_facebook').hide();
+            $('#mode_gmail').hide();
+            $('#mode_line').hide();
+            $('#mode_twitter').hide();
+            $("#mode_cas").hide();
+            $('#mode_other_oauth').hide();
+			$("#mode_saml").hide();
+            if (interval_wechat) clearInterval(interval_wechat);
+            interval_wechat = null;
+            $("#mode_saml").fadeIn();
+        };
+    }
+    window.mode_password = mode_password;
+    window.mode_sms = mode_sms;
+    window.mode_qrcode = mode_qrcode;
+    window.mode_wechat = mode_wechat;
+    window.mode_freeauth = mode_freeauth;
+    window.mode_mtqrcode = mode_mtqrcode;
+    window.mode_WXscan = mode_WXscan;
+    window.mode_mobile = mode_mobile;
+
+    window.mode_dingtalk = mode_dingtalk;
+    window.mode_qywechat = mode_qywechat;
+    window.mode_moa = mode_moa;
+    window.mode_facebook = mode_facebook;
+    window.mode_gmail = mode_gmail;
+    window.mode_line = mode_line;
+    window.mode_twitter = mode_twitter;
+
+    window.mode_cas = mode_cas;
+    window.mode_other_oauth = mode_other_oauth;
+	window.mode_saml = mode_saml;
+	window.mode_twoAuthOpt = mode_twoAuthOpt;
+}
+
+function encryptByTripleDES(message) {
+    var keyHex = CryptoJS.enc.Utf8.parse('sangfor.');
+    if (!message) {
+        return '';
+    }
+    var encrypted = CryptoJS.DES.encrypt(String(message), keyHex, {
+        mode: CryptoJS.mode.ECB,
+        padding: CryptoJS.pad.Pkcs7
+    });
+    return encodeURIComponent(encrypted.ciphertext.toString());
+}
+
+// AES-CBC-128位加密
+function EncryptAES(word, iv) {
+	iv = CryptoJS.enc.Utf8.parse(iv);
+	
+	var srcs = CryptoJS.enc.Utf8.parse(word);
+	// 加密模式为CBC，补码方式为ZeroPadding
+	var encrypted = CryptoJS.AES.encrypt(srcs, SECOND_AUTH_AESCDC_KEY, {
+		iv: iv,
+		mode: CryptoJS.mode.CBC,
+		padding: CryptoJS.pad.ZeroPadding
+	});
+
+	//返回base64
+	return CryptoJS.enc.Base64.stringify(encrypted.ciphertext);
+
+}
+
+// AES-CBC-128位解密
+function DecryptAES(word, iv) {
+	iv = CryptoJS.enc.Utf8.parse(iv);
+
+	var base64 = CryptoJS.enc.Base64.parse(word);
+	var src = CryptoJS.enc.Base64.stringify(base64);
+
+	// 解密模式为CBC，补码方式为ZeroPadding
+	var decrypt = CryptoJS.AES.decrypt(src, SECOND_AUTH_AESCDC_KEY, {
+		iv: iv,
+		mode: CryptoJS.mode.CBC,
+		padding: CryptoJS.pad.ZeroPadding
+	});
+
+	var decryptedStr = decrypt.toString(CryptoJS.enc.Utf8);
+	return decryptedStr.toString();
+}
+
+// 二次认证相关的报错提示
+function jsAlertTwoAuth(msg) {
+	js_alert('mode_verifyIdentidy', msg);
+}
+
+// 二次认证密码验证校验
+function authPwdValidtor() {
+	var user = $id('mode_verifyIdentidy-password_name').value,
+			pwd = $id('mode_verifyIdentidy-password_pwd').value;
+	if ((user.length <= 0) || (pwd.length <= 0)) {
+		jsAlertTwoAuth(_('Username and password are required. '));
+		return false;
+	} else if (user.length > 95) {
+		jsAlertTwoAuth(_('Username cannot exceed 95 characters.'));
+		return false;
+	}
+	jsAlertTwoAuth('');
+	return true;
+}
+
+// 验证手机号：非空，最大20位，只能输入数字（已在html中进行校验）
+function valitePhone(user) {
+	if (user && !user.disabled) {
+		if (user.value.length <= 0) {
+			jsAlertTwoAuth(_("Mobile number is required. "));
+			return false;
+		} else if (user.value.length > MAX_PHONE_NUM) {
+			jsAlertTwoAuth(_("Mobile number cannot exceed 20 characters."));
+			return false;
+		}
+	}
+	return true;
+}
+
+// 二次认证短信验证校验 -手机号：非空，最大20位，只能输入数字（已在html中进行校验），验证码：非空，6位数字
+function valiteCodeSms() {
+	// 手机号验证不通过，直接报错提示
+	if (!valitePhone($id("mode_verifyIdentidy-sms_name"))) return;
+	
+	var pwd = $id('mode_verifyIdentidy-sms_pwd').value;
+	if (pwd === '') {
+		jsAlertTwoAuth(_('Verification code is required. '));
+		return false;
+	}
+	if (pwd.length !== 6) {
+		jsAlertTwoAuth( _("Verification code must be 6 digits long. "));
+		return false;
+	}
+
+	jsAlertTwoAuth('');
+	return true;
+}
+
+// 根据传入的tabs前往指定的认证页面
+function gotwoFactorAuth(url, tabsParams) {
+	var twoAuthUrl = replaceParamVal(url, 'tabs', tabsParams);
+	window.location.href = twoAuthUrl;
+}
+
+// 返回首次认证，这里需要区分是否是由预览页面的二次认证返回
+function backFirstAuth() {
+	var isPreview = getUrlParam("ispreview");
+	var isTwoAuth = getUrlParam("tabs") === 'twoAuthOpt';
+
+	if (isPreview && isTwoAuth) {
+		previewChangeSelect('showfirst');
+		return;
+	}
+	activatePage('login')
+}
+
+// 切换预览页面下的首次认证和二次认证的下拉框的值和页面
+function previewChangeSelect(type) {
+	if (window.parent.topFrame) {
+		window.parent.topFrame.setAuthSelect(type, PREVIEW_TYPE.pc)
+		window.parent.topFrame.show(PREVIEW_TYPE.pc);
+	} else {
+		window.parent.parent.topFrame.setAuthSelect(type, PREVIEW_TYPE.mobile)
+		window.parent.parent.topFrame.show(PREVIEW_TYPE.mobile);
+	} 
+}
+
+// 替换指定传入参数的值,oUrl为链接,paramName为参数,replaceWith为新值
+function  replaceParamVal (oUrl, paramName, replaceWith) {
+	var re = new RegExp('(' + paramName + '=)([^&]*)', 'gi');
+	return oUrl.replace(re, paramName + '=' + replaceWith);
+}
+
+// 二次认证动态码校验 校验条件：非空、只能输入6位数字
+function otpValidtor(type) {
+	var code = $id(AuthTypeMap[type].inputId).value;
+	if(!code) {
+		js_alert(AuthTypeMap[type].authId, _("Code is required. "));
+		return false;
+	}
+	if (code.length !== 6) {
+		js_alert(AuthTypeMap[type].authId, _("Code must be 6 digits long. "));
+		return false;
+	}
+	return true;
+}
+
+// 二次认证动态码登录
+function onOtpLogin(type) {
+	//校验不通过直接退出
+	if (!otpValidtor(type)) return;
+
+	var authType = AuthTypeMap[type] || {};
+	var params = authType.loginParams;
+	params.pwd = $id(authType.inputId).value;
+
+	// 登录时，给后台发送字段确认是否为预览页面
+	params.preview = (window.top.location.search.indexOf('is_preview') !== -1);
+
+	//参数组装好，调用通用的登录方法
+	loginRequest(params, authType.authId, $id(authType.loginBtn));
+}
+
+// 打开动态码指引页面
+function openAuthGuidePage() {
+
+	// 获取【获取密钥】按钮状态（是否有权限获取）
+	getBtnCode();
+	activatePage('downdymanicCodeApp');
+}
+
+// 获取【获取密钥】按钮是否可点击，只有obtainKeyPermission为true才可点击
+function getBtnCode() {
+	$('.app_get-code').hide()
+	$('.app_get-code_disable').show()
+	$.ajax({
+		url: g_url,
+		type: "POST",
+		data: {
+			opr: 'getOtpSecretKeyAuthWay'
+		},
+		success: function(json) {
+			var json = json_decode(json);
+			if (json && json.success) {
+				if (json.obtainKeyPermission) {
+					$('.app_get-code').show()
+					$('.app_get-code_disable').hide()
+				}
+			}
+		}
+	})
+}
+
+// 切换动态码指引的显示，未选中的添加透明度样式
+function changeDynamicTab(tab) {
+	$('#microsoftAuthenticatorApp, .microsoft-triangle-up')[tab === 'microsoft' ? 'show' : 'hide']();
+	$('#googleAuthenticatorApp, .google-triangle-up')[tab === 'microsoft' ? 'hide' : 'show']();
+
+	$('.microsoftAuthenticatorApp')[tab === 'microsoft' ? 'removeClass' : 'addClass']('opacity-class');
+	$('.googleAuthenticatorApp')[tab === 'microsoft' ? 'addClass' : 'removeClass']('opacity-class');
+}
+
+// 关闭获取密钥弹窗
+function closeModel() {
+	$('#auth-step_second, #mode_verifyIdentidy_page').hide();
+	if (currentAjax) {
+		currentAjax.abort();
+	}
+}
+
+// 打开获取密钥弹窗
+function getCode(isOverdue, appValue) {
+	$("#single-title").html(_('Get OTP Secret Key'));
+
+	// 每次打开获取密钥弹窗，都要清空之前输入的输入框文案（为了兼容ie8，需要同时修改对应label的提示语显示）
+	$("#mode_verifyIdentidy-password_name, #mode_verifyIdentidy-password_pwd, #mode_verifyIdentidy-sms_pwd, #mode_verifyIdentidy-sms_name").val('');
+	$("#mode_verify-phone_label, #mode_verify-password_label, #mode_verify-name_label, #mode_verify-pwd_label").attr("style", 'opacity: 1');
+
+	// 打开获取密钥弹窗
+	activatePage(isOverdue ? 'getOverdueCode' : 'getAuthCode')
+}
+
+// 请求获取密钥弹窗内容
+function initCreditSecret () {
+
+	// 由于每次打开弹窗，认证方式都有可能变化，因此每次打开都先重置下弹窗，然后根据返回的内容再显示正确的验证方式
+	resetSecretModel();
+
+	$.ajax({
+		url: g_url,
+		type: "POST",
+		timeout: 10 * 6 * 1000,
+		data: {
+			opr: 'getOtpSecretKeyAuthWay'
+		},
+		success: function(json) {
+			var json = json_decode(json);
+			if(json.backFirstAuth) {
+				jsAlertTwoAuth(json.msg);
+				delayExecutionFn('backFirst');
+				return
+			}
+			if (json && json.success && json.authTab.length > 0) {
+				var showCth = !json.obtainKeyPermission;
+				$('#app_get-code')[showCth ? 'hide' : 'show']();
+				$('#app_get-code_disable')[showCth ? 'show' : 'hide']();
+
+				showPwdAuth(json);
+				initStepMethod(json.authTab);
+			}else {
+				jsAlertTwoAuth(json.msg || _('Loading failed. Please contact the network administrator.'));
+			}
+		},
+		error: function(o) {
+			jsAlertTwoAuth(son.msg);
+			o.backFirstAuth && delayExecutionFn('backFirst');
+		}
+	})
+}
+
+// type=backFirst：延时3s返回首次认证
+// type=closeModle：延时3s关闭密码验证弹窗
+function delayExecutionFn(type) {
+	setTimeout(function() {
+		type === 'backFirst' ? backFirstAuth() : closeModel();
+	}, BACK_DELY_TIMEOUT);
+}
+
+// 重置弹窗内容
+function resetSecretModel() {
+	$('#auth-pwd-submitBtn, #secret_submitBtn').val(_('OK'));
+	$('#mode_verifyIdentidy_page, #mode_verifyIdentidy .step_first').show();
+	$("#sms-auth-can-bind, #sms-auth-cannot-bind, #mode_verifyIdentidy-sms, #secret_submitBtn").hide();
+	$("#mode_verifyIdentidy-sms_name, #mode_verifyIdentidy-sms_pwd").attr("disabled", false);
+	$("#sms-auth-no_bind").html('');
+}
+
+// 生成短信验证方式
+function showPwdAuth(result) {
+	var phone = '';
+
+	// 解密后台返回的手机号码
+	if (result.phone) {
+		phone = DecryptAES(result.phone, result.iv) ||  ''
+	}
+
+	// 手机号码以****的形式加密
+	g_user_phone = phone;
+	phone = getPhoneNum(phone);
+
+	if (result.authTab.indexOf('smsAuth') !== -1) {
+
+		// 用户已绑定手机号-直接可以输入验证码进行验证
+		if (phone) {
+			$("#sms-auth-no_bind").html('Use the bound mobile number ' + phone + ' for verification');
+			$("#sms-auth-no_bind").attr("style", 'color: #5C5C5C;');
+			$("#sms-auth-can-bind, #secret_submitBtn").show();
+			$("#mode_verifyIdentidy-sms_name").attr("disabled", true);
+		} else {
+			if(result.autoBind) {
+				// 用户未绑定手机号，但是允许用户自动绑定手机号-可以通过输入手机号和验证码进行验证，验证成功后会自动绑定手机号
+				$("#sms-auth-no_bind").html('You have not bound a mobile number for SMS verification. The number specified here will be auto bound to your account, and can be used to verify future logins.');
+				$("#sms-auth-can-bind, #mode_verifyIdentidy-sms, #secret_submitBtn").show();
+				$("#sms-auth-no_bind").attr("style", 'color: #D94B4B;');
+			} else {
+				// 用户未绑定手机号，且不允许自动绑定，直接提示请联系管理员
+				$("#mode_verifyIdentidy-sms_name, #mode_verifyIdentidy-sms_pwd").attr("disabled", true);
+				$("#sms-auth-cannot-bind").show();
+				$("#secret_submitBtn").hide();
+			}
+		}
+	}
+}
+
+/**
+ * 若用户已绑定手机号，对手机号进行加密，具体加密规则为：x位->显示
+ * 1位手机号，直接显示(不太可能出现这个现象，兜底)
+ * 2~5位手机号，只显示最后一位数字，其他用*代替(2位->*1、3位->**2、4位->***3、5位->****4)
+ * 超过5位手机号，中间4位替换成****，
+ * * 奇数位：7位->1****67、9位->12****789、11位->123****8901
+ * * 偶数位：6位->1****6、8位->12****78、10位->123****890
+ */
+function getPhoneNum(phone) {
+	if (phone.length > 4) {
+		var halfPhone = (phone.length - 4)/2;
+		var reg =new RegExp("(\\d{" + Math.floor(halfPhone) + "})\\d{4}(\\d{" + Math.ceil(halfPhone) + "})")
+		phone = phone.replace(reg, '$1****$2')
+	} else {
+		phone = new Array(phone.length).join('*') + phone.substring(phone.length - 1, phone.length)
+	}
+	return phone;
+}
+
+/** 展示切换认证方式 */
+function initStepMethod(authTab) {
+	$('#mode_verifyIdentidy .sms-auth, #mode_verifyIdentidy .pwd-auth, #mode_verifyIdentidy .smsAuth, #mode_verifyIdentidy .pwdAuth').hide();
+
+	var sorts = authTab;
+
+	var dividTab = '#mode_verifyIdentidy .step_tabs .';
+	for (var i = 0; i < sorts.length; i++) {
+		(function() {
+			var temp = sorts[i];
+			var sortItem = $(dividTab + temp);
+			$('#mode_verifyIdentidy .' + sorts[i]).show();
+			sortItem.click(function() {
+				js_alert("mode_verifyIdentidy", '');
+				for(var j = 0; j < sorts.length; j++) {
+						$('#mode_verifyIdentidy .' + creditSecretConst[sorts[j]])[temp === sorts[j] ? 'show' : 'hide']();  //对应内容显示
+
+					//更新tab状态
+					if (temp === sorts[j]) {
+						sortItem.addClass('step_tabs_item_acitve');
+					} else {
+						$(dividTab + sorts[j]).removeClass('step_tabs_item_acitve');
+					}
+				}
+			});
+		})(i)
+	}
+
+	// 默认选择第一个
+	$(dividTab + sorts[0]).trigger('click');
+}
+
+function getRamNumber(num) {
+	var result = '';
+	for(var i = 0; i < num; i++) {
+	result+=Math.floor(Math.random()*num).toString(RANDOM_NUM);//获取0-15并通过toString转16进制
+	}
+	 
+	//默认字母小写，手动转大写
+	return result.toUpperCase();//另toLowerCase()转小写
+}	
+
+// 二次认证动态码认证，密码验证登录
+function onAuthPwdLogin() {
+	if(!authPwdValidtor()) return false;
+	var iv = getRamNumber(RANDOM_NUM);
+	var params = {
+		opr: 'otpPwdAuth',
+		userName: $id("mode_verifyIdentidy-password_name").value,
+		pwd: EncryptAES($id("mode_verifyIdentidy-password_pwd").value, iv),
+		iv: iv
+	};
+	var btn = $id("auth-pwd-submitBtn");
+	verifyOtpCode(btn, params);
+}
+
+// 获取二次认证动态码短信认证的验证码
+function onGetOtpSmsCode() {
+	// 手机号验证不通过，直接报错提示
+	if (!valitePhone($id("mode_verifyIdentidy-sms_name"))) return;
+	
+	var iv = getRamNumber(RANDOM_NUM);
+	var userName = g_user_phone ? g_user_phone : $id('mode_verifyIdentidy-sms_name').value;
+	var params = {
+		opr: 'getOtpSmsCode',
+		userName: EncryptAES(userName, iv),
+		iv: iv
+	}
+	cookie.set('optSmsCode', userName, g_remberTime);
+
+	// 获取短信验证码
+	getSmsCodeRequest(params, 'mode_verifyIdentidy', $id('mode_verifyIdentidy-sms_getCodeBtn'), function(o) {
+		o.backSecretVerification && delayExecutionFn('closeModel');
+	})
+}
+
+// 发送短信验证请求
+function getCodeSms () {
+	if (!valiteCodeSms()) return false;
+	var iv = getRamNumber(RANDOM_NUM);
+	var params = {
+		opr: 'verifyOtpSmsCode',
+		userName: EncryptAES(g_user_phone ? g_user_phone : $id('mode_verifyIdentidy-sms_name').value, iv),
+		pwd: $id("mode_verifyIdentidy-sms_pwd").value,
+		iv: iv
+	};
+	var btn = $id("secret_submitBtn");
+	verifyOtpCode(btn, params)
+}
+
+// 校验短信验证和密码验证
+function verifyOtpCode (btn, params) {
+	btn.orgValue = btn.value
+	btn.value = _('Verifying')
+	btn.disabled = true;
+	var $btn = $(btn);
+
+	$ajax(params, 'mode_verifyIdentidy', function(o) {
+		btn.disabled = false;
+		if (!o.success) {
+		  btn.value = btn.orgValue;
+			jsAlertTwoAuth(o.msg);
+			o.backSecretVerification && delayExecutionFn('closeModel');
+			return;
+		}
+		btn.value = _('Verified')
+		$('#auth-step_first, #step_tabs_all').hide();
+		$('#auth-step_second').show();
+		var url = o.secretKey || '';
+		if(url && o.iv) {
+
+			// 获取到加密的二维码信息后，先解密出密钥信息，再进行二维码的显示
+			var target = url.match(REG_SERECT_VALID);
+			g_target = DecryptAES(target && target[1] || '', o.iv);
+			var newUrl = replaceParamVal(url, 'secret', g_target)
+
+			$("#sms-auth_qrcodeImg").html(create_qrcode(newUrl, newUrl.length <= 400 ? "12" : "0", "L"));
+			$("#sms-auth_qrcodeText").html(g_target);
+			
+			getBtnCode();
+		} else {
+			$("#sms-auth_qrcodeText").html(_('Failed to get the barcode.'));
+		}
+	}, btn, function() {
+		btn.disabled = false;
+		btn.value = btn.orgValue;
+		$btn && $btn.removeClass('disabled');
+	});
+}
+
+// 复制密钥
+function copyText () {
+	if (window.clipboardData) {
+		// 清除原有剪切板的数据
+		window.clipboardData.clearData();
+		// 将内容复制到剪切板
+		window.clipboardData.setData("Text", g_target);
+		// 其它浏览器,
+		SF.showMsg(_("复制成功"));
+	} else {
+		if (!document.queryCommandSupported || !document.queryCommandSupported("copy")) {
+			SF.showErr(_('该浏览器不支持复制文本功能，请手动复制或者更换浏览器后重试'));
+		}
+			var dom = document.body,
+					textArea = document.createElement("textArea");
+			dom.appendChild(textArea);
+			textArea.style.position = "absolute";
+			textArea.style.left = "-9999px";
+			textArea.style.top = "-1000px";
+			textArea.value = g_target
+
+			// 防止ios设备点击复制选中输入框时，键盘弹出在隐藏导致的页面抖动，隐私直接禁用输入框
+			textArea.setAttribute('readonly', 'readonly')
+			textArea.select();
+			document.execCommand("Copy");
+			dom.removeChild(textArea);
+			$("#auth-login_success_copy").show();
+			$("#auth-login_success_copy").delay(3000).hide(300);
+	}
+}

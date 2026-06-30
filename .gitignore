@@ -1,0 +1,24 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Nuitka Build directories & artifacts
+utarwifihelper.build/
+utarwifihelper.dist/
+utarwifihelper.onefile-build/
+
+# Compiled Executables (Releases should be uploaded to GitHub Releases)
+*.exe
+
+# Private credentials configuration (CRITICAL!)
+config.json
+
+# Temporary files
+*.tmp
+*.log

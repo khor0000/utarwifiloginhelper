@@ -1,0 +1,20 @@
+@charset "utf-8";
+/* CSS Document */
+
+
+@media only screen and (max-width: 640px),(max-height:400px) {
+    .head .logo dl dt { margin: 14px 10px 14px 15px;}
+    .head .logo dl dd {width:200px;}
+    .login { margin:10px 10px 10px 30px !important;width:360px; height:350px;overflow:hidden; left:10px;top:100px;}
+    .login .login_body {padding-top:0px;float: none;}
+    .central_bg {display:none}
+    .bottom {display:none}
+    .other_x {display:none}
+    .other{ margin-top: 20px; border-top:1px solid #CCC; width:300px; padding-top:5px;}
+    .head .tool { float: none; margin-top:12px; position:absolute; right:0px; top:0px; }
+    .head .tool ul li { color: #333; font-size:12px; float:left; margin:0 10px 10px 0px; height:16px; padding-left:20px; }
+    .head .tool ul li.download { display:none}
+    .login .login_head dd { font-size:12px;}
+    .button_hide,.link-fluxcheck{ display:none}
+    .authok .link-fluxcheck{ display:inline-block;!important}
+}
