@@ -208,6 +208,13 @@ std::string get_current_ssid() {
     return current_name;
 }
 
+// Helper to check if current network profile matches target SSID (handles Windows numbered profiles like "utarwifi 9")
+bool is_matching_ssid(const std::string& current, const std::string& target) {
+    if (current == target) return true;
+    if (current.find(target + " ") == 0) return true;
+    return false;
+}
+
 // Connect to WiFi
 bool scan_and_connect(const std::string& target_ssid) {
     exec_cmd_silent(L"netsh wlan show networks"); // triggers scan
@@ -216,7 +223,7 @@ bool scan_and_connect(const std::string& target_ssid) {
     exec_cmd_silent(cmd);
     for (int i = 0; i < 10; i++) {
         Sleep(1000);
-        if (get_current_ssid() == target_ssid) {
+        if (is_matching_ssid(get_current_ssid(), target_ssid)) {
             Sleep(2000); // extra time for DHCP
             return true;
         }
@@ -578,7 +585,7 @@ void run_logic() {
     // 1. Connect to WiFi
     std::string current = get_current_ssid();
     std::string target_str = to_string(g_targetSsid);
-    if (current != target_str) {
+    if (!is_matching_ssid(current, target_str)) {
         set_status(L"Scanning for 'utarwifi'...");
         if (!scan_and_connect(target_str)) {
             show_retry(L"Could not connect.\nPlease make sure WiFi is turned on\nand you are in range.");
