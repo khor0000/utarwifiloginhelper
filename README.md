@@ -1,6 +1,6 @@
 # UTAR WiFi Auto-Login Helper
 
-A lightweight, automated captive portal login utility for Universiti Tunku Abdul Rahman (UTAR) wireless network (`utarwifi`). It scans, connects, and logs in automatically using your credentials stored securely on your local machine.
+A lightweight, native Windows automated captive portal login utility for Universiti Tunku Abdul Rahman (UTAR) wireless network (`utarwifi`). It scans, connects, and logs in automatically using your credentials stored securely on your local machine.
 
 ---
 
@@ -8,51 +8,38 @@ A lightweight, automated captive portal login utility for Universiti Tunku Abdul
 
 - **Auto-Scan & Connect:** Automatically scans for and connects to the open `utarwifi` network.
 - **Captive Portal Detection:** Detects the UTAR login portal automatically.
-- **Secure Local Storage:** Keeps your credentials locally in `config.json` and encrypts your password via RC4 before sending it to the UTAR login portal. **Your login details are never shared or sent to any external server.**
-- **Clean Tkinter GUI:** High-DPI aware, clean login interface.
-- **Background Execution:** Closes automatically once internet connection is established.
+- **Secure Local Storage:** Keeps your credentials locally in `%APPDATA%\UtarWifiHelper\config.json` and encrypts your password via RC4 before sending it to the UTAR login portal. **Your login details are never shared or sent to any external server.**
+- **Native Win32 GUI:** Built using native Win32 APIs (no bulky runtime or HTML rendering) with a high-performance, anti-aliased Morphing Square loading animation powered by GDI+.
+- **Zero Antivirus Blocks:** Written in C++ with static linking (`/MT`) to prevent false-positive blocks and keep the file size under 500 KB.
+- **Background Execution:** Closes automatically once a stable internet connection is established.
 
 ---
 
 ## How to Use (Recommended)
 
 1. Download the latest compiled **`utarwifihelper.exe`** from the [Releases](https://github.com/khor0000/utarwifiloginhelper/releases) section.
-2. Place the `.exe` in a dedicated folder on your computer.
-3. Run `utarwifihelper.exe`.
-4. Enter your UTAR credentials on the first run. The helper will save it to a local `config.json` in the same directory.
-5. In the future, you can simply run `utarwifihelper.exe` or add it to your Windows startup folder, and it will log you in automatically in the background without prompting for credentials!
+2. Run `utarwifihelper.exe`.
+3. Enter your UTAR credentials on the first run. The helper will securely save them to `%APPDATA%\UtarWifiHelper\config.json`.
+4. In the future, you can simply run `utarwifihelper.exe` (or add a shortcut to your Windows Startup folder) and it will log you in automatically in the background without prompting for credentials!
 
 ---
 
-## Running from Source (Python)
+## Compiling from Source (C++)
 
-If you prefer to run it manually using Python:
+If you prefer to compile the application yourself:
 
 ### Prerequisites
 
-Make sure you have Python 3.10+ installed and the required dependencies:
+Make sure you have Visual Studio installed with the **Desktop development with C++** workload.
 
-```powershell
-pip install -r requirements.txt
-```
-*(Dependencies: `pywifi`, `requests`, `urllib3`)*
+### Build Executable
 
-### Run Script
-
-```powershell
-python utarwifihelper.py
-```
-
----
-
-## Compiling to `.exe`
-
-If you want to package the Python script yourself, we recommend using **Nuitka** (which translates code to C++ and compiles to a native binary to prevent Antivirus false positives):
-
-```powershell
-pip install nuitka
-python -m nuitka --standalone --onefile --enable-plugins=tk-inter --windows-console-mode=disable --assume-yes-for-downloads utarwifihelper.py
-```
+1. Open a PowerShell or Command Prompt.
+2. Run the build batch script:
+   ```powershell
+   .\build.bat
+   ```
+   *(This will automatically locate the Visual Studio compiler environment (`cl.exe` / `rc.exe`), compile the source files with static linking, embed the custom icon, and output the optimized `utarwifihelper.exe`.)*
 
 ---
 
