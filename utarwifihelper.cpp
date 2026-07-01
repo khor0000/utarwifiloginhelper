@@ -303,9 +303,9 @@ void save_config(const std::wstring& username, const std::wstring& password, con
 
 // Network logic
 bool check_internet() {
-    HINTERNET hSession = InternetOpenA("UtarWifiHelper", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    HINTERNET hSession = InternetOpenA("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
     if (!hSession) return false;
-    DWORD timeout = 1000;
+    DWORD timeout = 3000; // 3s
     InternetSetOptionA(hSession, INTERNET_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
     InternetSetOptionA(hSession, INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
     InternetSetOptionA(hSession, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
@@ -334,10 +334,12 @@ std::string detect_portal_url() {
     };
     for (int attempt = 0; attempt < 2; attempt++) {
         if (attempt > 0) Sleep(2000);
-        HINTERNET hSession = InternetOpenA("UtarWifiHelper", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+        HINTERNET hSession = InternetOpenA("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
         if (!hSession) continue;
-        DWORD timeout = 2000;
+        DWORD timeout = 5000; // 5s timeout for slow portal redirection DNS
         InternetSetOptionA(hSession, INTERNET_OPTION_CONNECT_TIMEOUT, &timeout, sizeof(timeout));
+        InternetSetOptionA(hSession, INTERNET_OPTION_SEND_TIMEOUT, &timeout, sizeof(timeout));
+        InternetSetOptionA(hSession, INTERNET_OPTION_RECEIVE_TIMEOUT, &timeout, sizeof(timeout));
 
         for (int i = 0; i < 3; i++) {
             HINTERNET hUrl = InternetOpenUrlA(hSession, test_urls[i], NULL, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_AUTO_REDIRECT, 0);
@@ -347,6 +349,9 @@ std::string detect_portal_url() {
                 if (HttpQueryInfoA(hUrl, HTTP_QUERY_RAW_HEADERS_CRLF, headers, &headers_len, NULL)) {
                     std::string h_str(headers);
                     size_t loc_pos = h_str.find("Location: ");
+                    if (loc_pos == std::string::npos) {
+                        loc_pos = h_str.find("location: ");
+                    }
                     if (loc_pos != std::string::npos) {
                         size_t end_pos = h_str.find("\r\n", loc_pos);
                         std::string loc = h_str.substr(loc_pos + 10, end_pos - (loc_pos + 10));
