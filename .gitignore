@@ -41,3 +41,7 @@ Welcome to UTAR Wireless Network_files/
 # Raw input icon assets
 iconV2.png
 
+# Ignore old Python development files
+utarwifihelper.py
+test_utarwifihelper.py
+requirements.txt
