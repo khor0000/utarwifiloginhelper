@@ -15,6 +15,7 @@ processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 #include <shlwapi.h>
 #include <shellapi.h>
 #include <gdiplus.h>
+#include <netlistmgr.h>
 #include <string>
 #include <vector>
 #include <thread>
@@ -31,6 +32,7 @@ processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "oleaut32.lib")
 
 // Window IDs
 #define ID_BTN_LOGIN 101
@@ -171,23 +173,39 @@ std::string exec_cmd_silent(const std::wstring& cmd) {
     return result;
 }
 
-// Get current SSID
+// Get current network name using Network List Manager COM API
 std::string get_current_ssid() {
-    std::string output = exec_cmd_silent(L"netsh wlan show interfaces");
-    std::stringstream ss(output);
-    std::string line;
-    while (std::getline(ss, line)) {
-        if (line.find("SSID") != std::string::npos && line.find("BSSID") == std::string::npos) {
-            size_t colon = line.find(":");
-            if (colon != std::string::npos) {
-                std::string ssid = line.substr(colon + 1);
-                ssid.erase(0, ssid.find_first_not_of(" \t\r\n"));
-                ssid.erase(ssid.find_last_not_of(" \t\r\n") + 1);
-                return ssid;
+    HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    bool coInit = SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
+
+    INetworkListManager* pNetworkListManager = NULL;
+    hr = CoCreateInstance(CLSID_NetworkListManager, NULL, CLSCTX_ALL, IID_INetworkListManager, (void**)&pNetworkListManager);
+    
+    std::string current_name = "";
+    if (SUCCEEDED(hr)) {
+        IEnumNetworks* pEnumNetworks = NULL;
+        hr = pNetworkListManager->GetNetworks(NLM_ENUM_NETWORK_CONNECTED, &pEnumNetworks);
+        if (SUCCEEDED(hr)) {
+            INetwork* pNetwork = NULL;
+            ULONG cFetched = 0;
+            while (pEnumNetworks->Next(1, &pNetwork, &cFetched) == S_OK) {
+                BSTR bstrName = NULL;
+                if (SUCCEEDED(pNetwork->GetName(&bstrName))) {
+                    std::wstring wname(bstrName);
+                    current_name = to_string(wname);
+                    SysFreeString(bstrName);
+                }
+                pNetwork->Release();
+                if (!current_name.empty()) {
+                    break;
+                }
             }
+            pEnumNetworks->Release();
         }
+        pNetworkListManager->Release();
     }
-    return "";
+    if (coInit) CoUninitialize();
+    return current_name;
 }
 
 // Connect to WiFi
