@@ -620,6 +620,16 @@ void run_logic() {
         if (check_internet()) {
             set_status(L"[✓] Login successful!");
             save_config(g_username, g_password, g_targetSsid);
+            
+            // Send a passive probe helper request to Microsoft NCSI server
+            // to trick Windows passive probing into updating the taskbar icon immediately.
+            HINTERNET hSession = InternetOpenA("UtarWifiHelperPassive", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+            if (hSession) {
+                HINTERNET hUrl = InternetOpenUrlA(hSession, "http://www.msftconnecttest.com/connecttest.txt", NULL, 0, INTERNET_FLAG_RELOAD, 0);
+                if (hUrl) InternetCloseHandle(hUrl);
+                InternetCloseHandle(hSession);
+            }
+
             Sleep(1000);
             PostMessage(g_hwnd, WM_CLOSE, 0, 0);
         } else {
